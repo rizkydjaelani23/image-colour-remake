@@ -1,16 +1,124 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
 
-// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
-// enough when changing adapters.
-// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum PreviewStatus {
+  DRAFT
+  APPROVED
+  HIDDEN
+  FEATURED
+}
+
+model Shop {
+  id          String   @id @default(cuid())
+  shopDomain  String   @unique
+  accessToken String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  usage ShopUsage?
+
+  products Product[]
+  zones    Zone[]
+  swatches Swatch[]
+  previews Preview[]
+}
+
+model Product {
+  id               String   @id @default(cuid())
+  shopId           String
+  shopifyProductId String
+  title            String?
+  handle           String?
+  imageUrl         String?
+  showOnStorefront Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  shop     Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  zones    Zone[]
+  previews Preview[]
+
+  @@unique([shopId, shopifyProductId])
+  @@index([shopId])
+}
+
+model Zone {
+  id           String   @id @default(cuid())
+  shopId       String
+  productId    String
+  name         String
+  key          String
+  maskPath     String?
+  outlinePath  String?
+  geometryJson Json?
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  shop     Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product  Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  previews Preview[]
+
+  @@unique([productId, key])
+  @@index([shopId, productId])
+}
+
+model Swatch {
+  id           String   @id @default(cuid())
+  shopId       String
+  fabricFamily String
+  colourName   String
+  imagePath    String
+  imageUrl     String?
+  hex          String?
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  shop     Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  previews Preview[]
+
+  @@unique([shopId, fabricFamily, colourName])
+  @@index([shopId, fabricFamily])
+}
+
+model Preview {
+  id                    String        @id @default(cuid())
+  shopId                String
+  productId             String
+  zoneId                String
+  swatchId              String?
+  shopifyProductId      String
+  fabricFamily          String
+  colourName            String
+  imagePath             String
+  imageUrl              String
+  thumbUrl              String?
+  width                 Int?
+  height                Int?
+  status                PreviewStatus @default(DRAFT)
+  approvedForStorefront Boolean       @default(false)
+  featured              Boolean       @default(false)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  shop    Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  zone    Zone    @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  swatch  Swatch? @relation(fields: [swatchId], references: [id], onDelete: SetNull)
+
+  @@unique([productId, zoneId, fabricFamily, colourName])
+  @@index([shopId, productId])
+  @@index([shopId, fabricFamily])
+  @@index([zoneId])
+  @@index([approvedForStorefront, featured])
 }
 
 model Session {
@@ -29,6 +137,20 @@ model Session {
   locale        String?
   collaborator  Boolean?  @default(false)
   emailVerified Boolean?  @default(false)
+
   refreshToken        String?
   refreshTokenExpires DateTime?
+}
+
+model ShopUsage {
+  id           String   @id @default(cuid())
+  shopId       String   @unique
+  previewCount Int      @default(0)
+  previewLimit Int      @default(50)
+  periodStart  DateTime @default(now())
+  periodEnd    DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 }

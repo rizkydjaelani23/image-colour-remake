@@ -1,49 +1,42 @@
-import { AppProvider } from "@shopify/shopify-app-react-router/react";
-import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData } from "react-router";
-
+import { AppProvider } from "@shopify/shopify-app-react-router/react";
+import en from "@shopify/polaris/locales/en.json";
 import { login } from "../../shopify.server";
-import { loginErrorMessage } from "./error.server";
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const errors = loginErrorMessage(await login(request));
-
-  return { errors };
-};
-
-export const action = async ({ request }: ActionFunctionArgs) => {
-  const errors = loginErrorMessage(await login(request));
-
+export async function loader({ request }: LoaderFunctionArgs) {
   return {
-    errors,
+    apiKey: process.env.SHOPIFY_API_KEY || "",
   };
-};
+}
 
-export default function Auth() {
-  const loaderData = useLoaderData<typeof loader>();
+export async function action({ request }: ActionFunctionArgs) {
+  const errors = await login(request);
+  return { errors };
+}
+
+export default function AuthLogin() {
+  const { apiKey } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
-  const [shop, setShop] = useState("");
-  const { errors } = actionData || loaderData;
 
   return (
-    <AppProvider embedded={false}>
-      <s-page>
+    <AppProvider embedded={false} apiKey={apiKey} i18n={en}>
+      <div style={{ padding: "24px", maxWidth: "420px" }}>
+        <h1>Log in</h1>
+
         <Form method="post">
-        <s-section heading="Log in">
-          <s-text-field
+          <input
+            type="text"
             name="shop"
-            label="Shop domain"
-            details="example.myshopify.com"
-            value={shop}
-            onChange={(e) => setShop(e.currentTarget.value)}
-            autocomplete="on"
-            error={errors.shop}
-          ></s-text-field>
-          <s-button type="submit">Log in</s-button>
-        </s-section>
+            placeholder="your-store.myshopify.com"
+          />
+          <button type="submit">Log in</button>
         </Form>
-      </s-page>
+
+        {actionData?.errors && (
+          <p style={{ color: "red" }}>Login failed</p>
+        )}
+      </div>
     </AppProvider>
   );
 }

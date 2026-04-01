@@ -1,41 +1,24 @@
-# This file stores configurations for your Shopify app.
-client_id = ""
-
-[access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_products"
+client_id = "1a5286ed899dfdc56653f2801f2c3b7f"
+name = "Image Colour Remake"
+application_url = "https://his-earth-barrier-green.trycloudflare.com"
+embedded = true
 
 [webhooks]
-api_version = "2025-10"
+api_version = "2026-04"
 
-  # Handled by: /app/routes/webhooks.app.uninstalled.tsx
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/app/uninstalled"
-  topics = ["app/uninstalled"]
+[access_scopes]
+scopes = "read_products,write_products"
 
-  # Handled by: /app/routes/webhooks.app.scopes_update.tsx
-  [[webhooks.subscriptions]]
-  topics = [ "app/scopes_update" ]
-  uri = "/webhooks/app/scopes_update"
+[auth]
+redirect_urls = [
+  "https://his-earth-barrier-green.trycloudflare.com/auth/callback",
+  "https://his-earth-barrier-green.trycloudflare.com/api/auth/callback"
+]
 
-  # Webhooks can have filters
-  # Only receive webhooks for product updates with a product price >= 10.00
-  # See: https://shopify.dev/docs/apps/build/webhooks/customize/filters
-  # [[webhooks.subscriptions]]
-  # topics = ["products/update"]
-  # uri = "/webhooks/products/update"
-  # filter = "variants.price:>=10.00"
+[app_proxy]
+url = "https://his-earth-barrier-green.trycloudflare.com/api/storefront-previews"
+subpath = "colour-gallery"
+prefix = "apps"
 
-  # Mandatory compliance topic for public apps only
-  # See: https://shopify.dev/docs/apps/build/privacy-law-compliance
-  # [[webhooks.subscriptions]]
-  # uri = "/webhooks/customers/data_request"
-  # compliance_topics = ["customers/data_request"]
-
-  # [[webhooks.subscriptions]]
-  # uri = "/webhooks/customers/redact"
-  # compliance_topics = ["customers/redact"]
-
-  # [[webhooks.subscriptions]]
-  # uri = "/webhooks/shop/redact"
-  # compliance_topics = ["shop/redact"]
+[build]
+automatically_update_urls_on_dev = true

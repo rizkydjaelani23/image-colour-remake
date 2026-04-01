@@ -1,0 +1,18 @@
+{
+  "productId": "gid://shopify/Product/9522200379633",
+  "baseImageUrl": "https://cdn.shopify.com/s/files/1/0789/9368/6769/files/1.jpg?v=1773918729",
+  "zones": [
+    {
+      "id": "zone-1774286459857",
+      "name": "Main Area",
+      "maskPath": "/uploads/gid___shopify_Product_9522200379633/zones/zone-1774286459857.png",
+      "createdAt": "2026-03-23T17:21:01.028Z",
+      "updatedAt": "2026-03-23T17:21:01.028Z",
+      "previewSettings": {
+        "tileScale": 0.16,
+        "blendStrength": 0.85,
+        "blur": 0.5
+      }
+    }
+  ]
+}

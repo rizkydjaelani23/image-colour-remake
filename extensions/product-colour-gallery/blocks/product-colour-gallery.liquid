@@ -1,0 +1,59 @@
+<div
+  class="pcg-root"
+  data-product-id="{{ product.id }}"
+  data-shop="{{ shop.permanent_domain }}"
+  data-heading="{{ block.settings.heading | escape }}"
+  data-subtext="{{ block.settings.subtext | escape }}"
+  data-collapsed-label="{{ block.settings.collapsed_label | escape }}"
+  data-disclaimer="{{ block.settings.disclaimer_text | escape }}"
+  data-show-disclaimer="{{ block.settings.show_disclaimer }}"
+  data-open-by-default="{{ block.settings.open_by_default }}"
+  {{ block.shopify_attributes }}
+></div>
+
+{% schema %}
+{
+  "name": "Product colour gallery",
+  "target": "section",
+  "stylesheet": "gallery.css",
+  "javascript": "gallery.js",
+  "settings": [
+    {
+      "type": "text",
+      "id": "collapsed_label",
+      "label": "Collapsed title",
+      "default": "See more colours"
+    },
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Expanded heading",
+      "default": "See this bed in other colours"
+    },
+    {
+      "type": "text",
+      "id": "subtext",
+      "label": "Subtitle text",
+      "default": "Browse approved colour options for this product."
+    },
+    {
+      "type": "checkbox",
+      "id": "show_disclaimer",
+      "label": "Show disclaimer text",
+      "default": true
+    },
+    {
+      "type": "text",
+      "id": "disclaimer_text",
+      "label": "Disclaimer text",
+      "default": "Image designs are approximately 80% accurate."
+    },
+    {
+      "type": "checkbox",
+      "id": "open_by_default",
+      "label": "Open by default",
+      "default": false
+    }
+  ]
+}
+{% endschema %}
