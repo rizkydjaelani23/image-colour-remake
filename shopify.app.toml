@@ -1,12 +1,18 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
 client_id = "1a5286ed899dfdc56653f2801f2c3b7f"
 name = "Image Colour Remake"
 application_url = "https://image-colour-remake-production.up.railway.app"
 embedded = true
 
+[build]
+automatically_update_urls_on_dev = true
+
 [webhooks]
 api_version = "2026-04"
 
 [access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_products,write_products"
 
 [auth]
@@ -19,6 +25,3 @@ redirect_urls = [
 url = "https://image-colour-remake-production.up.railway.app/api/storefront-previews"
 subpath = "colour-gallery"
 prefix = "apps"
-
-[build]
-automatically_update_urls_on_dev = true
