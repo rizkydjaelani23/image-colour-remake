@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "2825fb3dea6966b76098637269b94761"
+client_id = "1a5286ed899dfdc56653f2801f2c3b7f"
 name = "Image Colour Remake"
 application_url = "https://image-colour-remake-production.up.railway.app"
 embedded = true
