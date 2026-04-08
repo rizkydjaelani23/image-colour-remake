@@ -1,6 +1,6 @@
 client_id = "1a5286ed899dfdc56653f2801f2c3b7f"
 name = "Image Colour Remake"
-application_url = "https://his-earth-barrier-green.trycloudflare.com"
+application_url = "https://image-colour-remake.onrender.com"
 embedded = true
 
 [webhooks]
@@ -11,12 +11,12 @@ scopes = "read_products,write_products"
 
 [auth]
 redirect_urls = [
-  "https://his-earth-barrier-green.trycloudflare.com/auth/callback",
-  "https://his-earth-barrier-green.trycloudflare.com/api/auth/callback"
+  "https://image-colour-remake.onrender.com/auth/callback",
+  "https://image-colour-remake.onrender.com/api/auth/callback"
 ]
 
 [app_proxy]
-url = "https://his-earth-barrier-green.trycloudflare.com/api/storefront-previews"
+url = "https://image-colour-remake.onrender.com/api/storefront-previews"
 subpath = "colour-gallery"
 prefix = "apps"
 

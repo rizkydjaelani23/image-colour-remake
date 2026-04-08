@@ -152,18 +152,6 @@ function pillStyle(active: boolean, blue = false): CSSProperties {
   };
 }
 
-<div style={statCardStyle}>
-  <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 700, marginBottom: "8px" }}>
-    USAGE
-  </div>
-  <div style={{ fontSize: "22px", fontWeight: 800, color: "#0f172a", marginBottom: "6px" }}>
-    {usage ? `${usage.previewCount} / ${usage.previewLimit}` : "0 / 50"}
-  </div>
-  <div style={{ fontSize: "14px", color: "#475569", lineHeight: 1.6 }}>
-    Previews used this billing cycle.
-  </div>
-</div>
-
 export default function Index() {
   const { recentPreviews, usage } = useLoaderData<typeof loader>();
 
@@ -330,6 +318,19 @@ export default function Index() {
           marginBottom: "22px",
         }}
       >
+        <div style={statCardStyle}>
+          <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 700, marginBottom: "8px" }}>
+            USAGE
+          </div>
+
+          <div style={{ fontSize: "22px", fontWeight: 800, color: "#0f172a", marginBottom: "6px" }}>
+            {usage ? `${usage.previewCount} / ${usage.previewLimit}` : "0 / 50"}
+          </div>
+
+          <div style={{ fontSize: "14px", color: "#475569", lineHeight: 1.6 }}>
+            Previews used this billing cycle.
+          </div>
+        </div>
         <div style={statCardStyle}>
           <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 700, marginBottom: "8px" }}>
             MAIN TOOL

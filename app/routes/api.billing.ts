@@ -1,23 +1,20 @@
-import type { ActionFunctionArgs } from "@remix-run/node";
+import type { ActionFunction } from "react-router";
 import { authenticate } from "../shopify.server";
 
-export async function action({ request }: ActionFunctionArgs) {
+export const action: ActionFunction = async ({ request }) => {
   const { billing } = await authenticate.admin(request);
 
   const response = await billing.request({
-    plan: "Pro Plan",
-    isTest: true, // IMPORTANT: set false when live
-    lineItems: [
-      {
-        price: {
-          amount: 29,
-          currencyCode: "USD",
-        },
-        interval: "EVERY_30_DAYS",
-      },
-    ],
+    plan: "PRO_PLAN",
+    isTest: true,
     returnUrl: "/app",
   });
 
-  return Response.redirect(response.confirmationUrl);
-}
+  const res = response as { confirmationUrl?: string };
+
+  if (res.confirmationUrl) {
+    return Response.redirect(res.confirmationUrl);
+  }
+
+  return Response.redirect("/app");
+};

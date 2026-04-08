@@ -1,25 +1,29 @@
-import { prisma } from "./db.server";
+import prisma from "./db.server";
 
 export async function createPreviewRecord(params: {
   shopId: string;
   productId: string;
   zoneId: string;
   colourName: string;
-  swatchUrl: string;
-  previewUrl: string;
-  fabricFamilyName?: string | null;
-  fabricFamilyId?: string | null;
+  swatchId?: string | null;
+  shopifyProductId: string;
+  fabricFamily: string;
+  imagePath: string;
+  imageUrl: string;
+  thumbUrl?: string | null;
 }) {
   return prisma.preview.create({
     data: {
       shopId: params.shopId,
       productId: params.productId,
       zoneId: params.zoneId,
+      swatchId: params.swatchId ?? null,
+      shopifyProductId: params.shopifyProductId,
+      fabricFamily: params.fabricFamily,
       colourName: params.colourName,
-      swatchUrl: params.swatchUrl,
-      previewUrl: params.previewUrl,
-      fabricFamilyName: params.fabricFamilyName ?? null,
-      fabricFamilyId: params.fabricFamilyId ?? null,
+      imagePath: params.imagePath,
+      imageUrl: params.imageUrl,
+      thumbUrl: params.thumbUrl ?? null,
     },
   });
 }
@@ -27,7 +31,7 @@ export async function createPreviewRecord(params: {
 export async function listProductPreviews(productId: string) {
   return prisma.preview.findMany({
     where: { productId },
-    orderBy: [{ fabricFamilyName: "asc" }, { sortOrder: "asc" }, { createdAt: "desc" }],
+    orderBy: [{ createdAt: "desc" }],
   });
 }
 
@@ -38,9 +42,9 @@ export async function updatePreviewApproval(previewId: string, approvedForStoref
   });
 }
 
-export async function updatePreviewFeatured(previewId: string, featuredForFamily: boolean) {
+export async function updatePreviewFeatured(previewId: string, featured: boolean) {
   return prisma.preview.update({
     where: { id: previewId },
-    data: { featuredForFamily },
+    data: { featured },
   });
 }

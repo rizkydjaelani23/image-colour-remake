@@ -89,7 +89,10 @@ export default function VisualiserPage() {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
-  const [categoryWarning, setCategoryWarning] = useState<string | null>(null);
+  const [generationNotice, setGenerationNotice] = useState<string | null>(null);
+  const [currentBatch, setCurrentBatch] = useState<number>(0);
+  const [totalBatches, setTotalBatches] = useState<number>(0);
+  const [generatedCount, setGeneratedCount] = useState<number>(0);
 
   const imageRef = useRef<HTMLImageElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -176,7 +179,7 @@ export default function VisualiserPage() {
 
       try {
         const response = await fetch(
-          `/api/product/${encodeURIComponent(selectedProductId)}`,
+          `/api/product/${encodeURIComponent(selectedProductId ?? "")}`,
         );
 
         const rawText = await response.text();
@@ -225,6 +228,11 @@ export default function VisualiserPage() {
       redrawOutlinePreview();
     }
   }, [outlinePoints, tool]);
+
+  function getBatchInfo(totalItems: number, batchSize = 10) {
+    const totalBatches = Math.ceil(totalItems / batchSize);
+    return { batchSize, totalBatches };
+  }
 
   function resizeCanvasToImage() {
     const image = imageRef.current;
@@ -649,34 +657,52 @@ export default function VisualiserPage() {
   }
 
   async function generateBulkPreviews() {
-    if (!product) {
-      setBulkPreviewError("Please select a product first.");
-      return;
-    }
+  if (!product) {
+    setBulkPreviewError("Please select a product first.");
+    return;
+  }
 
-    if (!product.featuredImage) {
-      setBulkPreviewError("This product has no base image.");
-      return;
-    }
+  if (!product.featuredImage) {
+    setBulkPreviewError("This product has no base image.");
+    return;
+  }
 
-    if (!activeZoneId) {
-      setBulkPreviewError("Please save or select a zone first.");
-      return;
-    }
+  if (!activeZoneId) {
+    setBulkPreviewError("Please save or select a zone first.");
+    return;
+  }
 
-    if (bulkSwatchFiles.length === 0) {
-      setBulkPreviewError("Please upload 1 to 10 swatch files.");
-      return;
-    }
+  if (bulkSwatchFiles.length === 0) {
+    setBulkPreviewError("Please upload at least 1 swatch file.");
+    return;
+  }
 
-    setBulkPreviewLoading(true);
-    setBulkPreviewError(null);
-    setBulkPreviewResults([]);
+  setBulkPreviewLoading(true);
+  setBulkPreviewError(null);
+  setBulkPreviewResults([]);
+  setSelectedBulkIndex(null);
 
-    const results: Array<{ fileName: string; previewUrl: string }> = [];
+  const totalItems = bulkSwatchFiles.length;
+  const batchSize = 10;
+  const { totalBatches: batches } = getBatchInfo(totalItems, batchSize);
 
-    try {
-      for (const file of bulkSwatchFiles) {
+  setCurrentBatch(0);
+  setTotalBatches(batches);
+  setGeneratedCount(0);
+  setGenerationNotice(
+    "Previews are generated in batches of 10 to keep processing fast and stable. You can view completed images in the Preview Manager."
+  );
+
+  const results: Array<{ fileName: string; previewUrl: string }> = [];
+
+  try {
+    for (let i = 0; i < bulkSwatchFiles.length; i += batchSize) {
+      const batch = bulkSwatchFiles.slice(i, i + batchSize);
+      const batchNumber = Math.floor(i / batchSize) + 1;
+
+      setCurrentBatch(batchNumber);
+
+      for (const file of batch) {
         const colourName = file.name.replace(/\.[^/.]+$/, "");
 
         const formData = new FormData();
@@ -703,9 +729,9 @@ export default function VisualiserPage() {
         if (!response.ok) {
           const errorMessage =
             typeof data === "object" &&
-              data !== null &&
-              "error" in data &&
-              typeof (data as { error: unknown }).error === "string"
+            data !== null &&
+            "error" in data &&
+            typeof (data as { error: unknown }).error === "string"
               ? (data as { error: string }).error
               : `Failed on ${file.name}`;
 
@@ -728,18 +754,31 @@ export default function VisualiserPage() {
           throw new Error(`Preview URL missing for ${file.name}`);
         }
       }
-    } catch (err) {
-      console.error("Bulk preview error:", err);
 
-      if (err instanceof Error) {
-        setBulkPreviewError(err.message);
-      } else {
-        setBulkPreviewError("Failed to generate bulk previews.");
-      }
-    } finally {
-      setBulkPreviewLoading(false);
+      setGeneratedCount(results.length);
     }
+
+    setGenerationNotice(
+      "Preview generation finished. You can review all completed images in the Preview Manager."
+    );
+    setCurrentBatch(0);
+    setTotalBatches(0);
+  } catch (err) {
+    console.error("Bulk preview error:", err);
+
+    if (err instanceof Error) {
+      setBulkPreviewError(err.message);
+    } else {
+      setBulkPreviewError("Failed to generate bulk previews.");
+    }
+
+    setGenerationNotice(
+      "Some previews could not be generated. Completed images can still be viewed in the Preview Manager."
+    );
+  } finally {
+    setBulkPreviewLoading(false);
   }
+}
 
   async function saveZone() {
     if (!product) {
@@ -1803,6 +1842,66 @@ const stepTextStyle: CSSProperties = {
                     </button>
 
                     <div style={{ marginTop: "12px" }}>
+                    <div
+                      style={{
+                        marginBottom: "14px",
+                        padding: "14px 16px",
+                        borderRadius: "12px",
+                        background: "#f8fafc",
+                        border: "1px solid #e2e8f0",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: "13px",
+                          fontWeight: 700,
+                          color: "#0f172a",
+                          marginBottom: "6px",
+                        }}
+                      >
+                        Batch processing
+                      </div>
+
+                      <div
+                        style={{
+                          fontSize: "14px",
+                          lineHeight: 1.6,
+                          color: "#475569",
+                        }}
+                      >
+                        Previews are generated in batches of 10 to ensure fast and stable performance.
+                        You can continue working while previews are being processed and view completed images in the Preview Manager.
+                      </div>
+
+                      {bulkPreviewLoading && totalBatches > 0 && (
+                        <div
+                          style={{
+                            marginTop: "10px",
+                            fontSize: "13px",
+                            fontWeight: 700,
+                            color: "#1d4ed8",
+                          }}
+                        >
+                          Generating batch {currentBatch} of {totalBatches}
+                          {generatedCount > 0
+                            ? ` • ${generatedCount} preview${generatedCount === 1 ? "" : "s"} completed`
+                            : ""}
+                        </div>
+                      )}
+
+                      {generationNotice && !bulkPreviewLoading && (
+                        <div
+                          style={{
+                            marginTop: "10px",
+                            fontSize: "13px",
+                            color: "#0f766e",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {generationNotice}
+                        </div>
+                      )}
+                    </div>
                       <button
                         type="button"
                         onClick={generateBulkPreviews}
@@ -1820,13 +1919,13 @@ const stepTextStyle: CSSProperties = {
                           minHeight: "44px",
                         }}
                       >
-                        {bulkPreviewLoading ? "Generating bulk..." : "Create All Colour Previews"}
+                        {bulkPreviewLoading ? "Generating previews..." : "Generate previews in batches"}
                       </button>
                     </div>
 
                     <p style={{ marginTop: "12px", fontSize: "14px", color: "#555" }}>
-                      <strong>Bulk uploads available.</strong> Upload one swatch for a quick preview now,
-                      or bulk upload multiple swatches later to generate several colour variants faster.
+                      <strong>Bulk uploads available.</strong> Upload multiple swatches and the app will
+                      generate previews in batches of 10. Completed previews will appear in the Preview Manager.
                     </p>
 
                     {previewError && (

@@ -20,7 +20,7 @@ export default function AuthLogin() {
   const actionData = useActionData<typeof action>();
 
   return (
-    <AppProvider embedded={false} apiKey={apiKey} i18n={en}>
+    <AppProvider>
       <div style={{ padding: "24px", maxWidth: "420px" }}>
         <h1>Log in</h1>
 
