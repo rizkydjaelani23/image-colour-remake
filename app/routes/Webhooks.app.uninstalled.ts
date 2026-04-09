@@ -1,15 +1,18 @@
-// app/routes/webhooks.app.uninstalled.ts
+import type { ActionFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+import prisma from "../utils/db.server";
 
-import { json } from "@remix-run/node";
-import prisma from "~/db.server";
+export async function action({ request }: ActionFunctionArgs) {
+  try {
+    const { shop } = await authenticate.webhook(request);
 
-export const action = async ({ request }) => {
-  const shop = request.headers.get("x-shopify-shop-domain");
+    await prisma.session.deleteMany({
+      where: { shop },
+    });
 
-  if (shop) {
-    await prisma.session.deleteMany({ where: { shop } });
-    await prisma.preview.deleteMany({ where: { shopId: shop } });
+    return new Response(null, { status: 200 });
+  } catch (error) {
+    console.error("App uninstall webhook HMAC validation failed:", error);
+    return new Response("Unauthorized", { status: 401 });
   }
-
-  return json({ success: true });
-};
+}

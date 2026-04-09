@@ -4,32 +4,23 @@ import prisma from "../utils/db.server";
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
-    const { topic, shop, payload } = await authenticate.webhook(request);
+    const { topic, shop } = await authenticate.webhook(request);
 
     switch (topic) {
-      case "CUSTOMERS_DATA_REQUEST": {
-        console.log("customers/data_request received", { shop, payload });
+      case "CUSTOMERS_DATA_REQUEST":
         return new Response(null, { status: 200 });
-      }
 
-      case "CUSTOMERS_REDACT": {
-        console.log("customers/redact received", { shop, payload });
+      case "CUSTOMERS_REDACT":
         return new Response(null, { status: 200 });
-      }
 
-      case "SHOP_REDACT": {
-        console.log("shop/redact received", { shop, payload });
-
+      case "SHOP_REDACT":
         await prisma.session.deleteMany({
           where: { shop },
         });
-
         return new Response(null, { status: 200 });
-      }
 
-      default: {
-        return new Response("Unhandled compliance webhook topic", { status: 404 });
-      }
+      default:
+        return new Response("Unhandled webhook topic", { status: 404 });
     }
   } catch (error) {
     console.error("Compliance webhook HMAC validation failed:", error);
