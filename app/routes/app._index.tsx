@@ -310,6 +310,58 @@ export default function Index() {
         </div>
       </div>
 
+      <div style={cardStyle}>
+        <h2 style={{ margin: "0 0 8px 0", fontSize: "22px", fontWeight: 800, color: "#0f172a" }}>
+          Display previews on your store
+        </h2>
+
+        <p style={{ margin: "0 0 16px 0", color: "#64748b", fontSize: "14px", lineHeight: 1.6 }}>
+          After generating and approving previews, you can display them on your product pages using the app block.
+        </p>
+
+        <div style={{ display: "grid", gap: "12px" }}>
+          {[
+            "1. Go to Online Store → Themes",
+            "2. Click Customize on your active theme",
+            "3. Open a product template",
+            "4. Click Add block → Apps → Image Colour Remake",
+            "5. Position the block where you want it",
+            "6. Click Save",
+            "7. Open your product page to see all generated colour previews",
+          ].map((step) => (
+            <div
+              key={step}
+              style={{
+                padding: "12px 14px",
+                borderRadius: "14px",
+                border: "1px solid #e5e7eb",
+                background: "#f8fafc",
+                fontSize: "14px",
+                color: "#0f172a",
+                fontWeight: 600,
+              }}
+            >
+              {step}
+            </div>
+          ))}
+        </div>
+
+        <div
+          style={{
+            marginTop: "16px",
+            padding: "14px",
+            borderRadius: "14px",
+            background: "#eef2ff",
+            border: "1px solid #c7d2fe",
+            fontSize: "14px",
+            color: "#3730a3",
+            fontWeight: 600,
+          }}
+        >
+          Tip: Only approved previews will be shown on your storefront. Use the Preview Manager to control what customers see.
+        </div>
+      </div>
+
       <div
         style={{
           display: "grid",
