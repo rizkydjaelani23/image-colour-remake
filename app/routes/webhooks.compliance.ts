@@ -3,9 +3,21 @@ import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
 
 export async function action({ request }: ActionFunctionArgs) {
-  try {
-    const { topic, shop } = await authenticate.webhook(request);
+  let topic: string;
+  let shop: string;
 
+  try {
+    const result = await authenticate.webhook(request);
+    topic = result.topic;
+    shop = result.shop;
+  } catch (error) {
+    console.error("HMAC verification failed:", error);
+
+    // 🔥 THIS IS CRITICAL
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  try {
     switch (topic) {
       case "CUSTOMERS_DATA_REQUEST":
         return new Response(null, { status: 200 });
@@ -20,10 +32,12 @@ export async function action({ request }: ActionFunctionArgs) {
         return new Response(null, { status: 200 });
 
       default:
-        return new Response("Unhandled webhook topic", { status: 404 });
+        return new Response("Unhandled topic", { status: 200 });
     }
   } catch (error) {
-    console.error("Compliance webhook HMAC validation failed:", error);
-    return new Response("Unauthorized", { status: 401 });
+    console.error("Webhook processing failed:", error);
+
+    // Optional fallback
+    return new Response("Server error", { status: 200 });
   }
 }
