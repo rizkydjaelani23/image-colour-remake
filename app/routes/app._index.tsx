@@ -4,7 +4,6 @@ import { Link, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
 import { getOrCreateShop } from "../utils/shop.server";
-import { BillingInterval } from "@shopify/shopify-app-react-router/server";
 
 type RecentPreview = {
   id: string;
@@ -18,20 +17,7 @@ type RecentPreview = {
 
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { billing, session } = await authenticate.admin(request);
-
-  const isTestBilling = process.env.NODE_ENV !== "production";
-
-  await billing.require({
-  plans: ["PRO_PLAN"],
-  isTest: isTestBilling,
-  onFailure: async () =>
-    billing.request({
-      plan: "PRO_PLAN",
-      isTest: isTestBilling,
-      trialDays: 3,
-    }),
-});
+  const { session } = await authenticate.admin(request);
 
   const shop = await getOrCreateShop(session.shop);
 

@@ -1,22 +1,9 @@
 import type { ActionFunction } from "react-router";
-import { authenticate } from "../shopify.server";
 
-export const action: ActionFunction = async ({ request }) => {
-  const { billing } = await authenticate.admin(request);
-
-  const isTestBilling = process.env.NODE_ENV !== "production";
-
-  const response = await billing.request({
-    plan: "PRO_PLAN",
-    isTest: isTestBilling,
-    returnUrl: "/app",
+export const action: ActionFunction = async () => {
+  // Billing is handled by Shopify Managed Pricing.
+  // This route is kept as a placeholder.
+  return new Response(JSON.stringify({ ok: true }), {
+    headers: { "Content-Type": "application/json" },
   });
-
-  const res = response as { confirmationUrl?: string };
-
-  if (res.confirmationUrl) {
-    return Response.redirect(res.confirmationUrl);
-  }
-
-  return Response.redirect("/app");
 };
