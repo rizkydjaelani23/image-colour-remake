@@ -600,6 +600,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const productId = formData.get("productId");
     const zoneId = formData.get("zoneId");
     const swatchFile = formData.get("swatch");
+    const swatchUrlRaw = formData.get("swatchUrl");
 
     const fabricFamilyRaw = formData.get("fabricFamily");
     const colourNameRaw = formData.get("colourName");
@@ -620,6 +621,11 @@ export async function action({ request }: ActionFunctionArgs) {
         ? swatchIdRaw.trim()
         : null;
 
+    const swatchUrl =
+      typeof swatchUrlRaw === "string" && swatchUrlRaw.trim()
+        ? swatchUrlRaw.trim()
+        : null;
+
     if (!productId || typeof productId !== "string") {
       return Response.json({ error: "Missing product ID" }, { status: 400 });
     }
@@ -630,8 +636,14 @@ export async function action({ request }: ActionFunctionArgs) {
       return Response.json({ error: "Missing zone ID" }, { status: 400 });
     }
 
-    if (!(swatchFile instanceof File) || swatchFile.size === 0) {
-      return Response.json({ error: "Missing swatch file" }, { status: 400 });
+    // Accept EITHER an uploaded file OR a URL to an existing image (e.g. from Shopify Files)
+    const hasFile = swatchFile instanceof File && swatchFile.size > 0;
+
+    if (!hasFile && !swatchUrl) {
+      return Response.json(
+        { error: "Missing swatch. Either upload a file or pick one from Shopify Files." },
+        { status: 400 },
+      );
     }
 
     const shop = await getOrCreateShop(shopDomain);
@@ -665,12 +677,12 @@ if (now > usage.periodEnd) {
   });
 }
 
-if (usage.previewCount >= usage.previewLimit) {
-  return Response.json(
-    { error: "Preview limit reached for this billing cycle." },
-    { status: 403 },
-  );
-}
+//if (usage.previewCount >= usage.previewLimit) {
+ // return Response.json(
+  //  { error: "Preview limit reached for this billing cycle." },
+  //  { status: 403 },
+ // );
+// }
 
     const product = await prisma.product.findFirst({
       where: {
@@ -721,7 +733,24 @@ if (usage.previewCount >= usage.previewLimit) {
     }
 
     const baseBuffer = Buffer.from(await baseResponse.arrayBuffer());
-    const swatchBuffer = Buffer.from(await swatchFile.arrayBuffer());
+
+    // Load swatch from file upload OR from URL (Shopify Files / recent swatch)
+    let swatchBuffer: Buffer;
+
+    if (hasFile) {
+      swatchBuffer = Buffer.from(await (swatchFile as File).arrayBuffer());
+    } else if (swatchUrl) {
+      const swatchResponse = await fetch(swatchUrl);
+      if (!swatchResponse.ok) {
+        return Response.json(
+          { error: "Could not download swatch image from URL" },
+          { status: 500 },
+        );
+      }
+      swatchBuffer = Buffer.from(await swatchResponse.arrayBuffer());
+    } else {
+      return Response.json({ error: "Missing swatch" }, { status: 400 });
+    }
 
     const rawMaskBuffer = await fs.readFile(
     path.join(process.cwd(), "public", zone.maskPath.replace(/^\/+/, "")),
@@ -771,6 +800,52 @@ if (usage.previewCount >= usage.previewLimit) {
       upsert: true,
     });
 
+    // Auto-save / update the swatch record so it appears in "Recently used"
+    // We always upload a copy of the swatch to our own storage so it survives
+    // even if the merchant deletes the original Shopify File.
+    let savedSwatchId: string | null = swatchId;
+
+    try {
+      const swatchStoragePath = [
+        shop.shopDomain,
+        "swatches",
+        `${safeFamily}__${safeColour}.png`,
+      ].join("/");
+
+      const savedSwatchImage = await uploadBufferToStorage({
+        path: swatchStoragePath,
+        buffer: swatchBuffer,
+        contentType: "image/png",
+        upsert: true,
+      });
+
+      const savedSwatch = await prisma.swatch.upsert({
+        where: {
+          shopId_fabricFamily_colourName: {
+            shopId: shop.id,
+            fabricFamily,
+            colourName,
+          },
+        },
+        update: {
+          imagePath: savedSwatchImage.path,
+          imageUrl: savedSwatchImage.publicUrl,
+        },
+        create: {
+          shopId: shop.id,
+          fabricFamily,
+          colourName,
+          imagePath: savedSwatchImage.path,
+          imageUrl: savedSwatchImage.publicUrl,
+        },
+      });
+
+      savedSwatchId = savedSwatch.id;
+    } catch (swatchSaveError) {
+      // Don't fail the whole request if swatch saving has trouble
+      console.error("Failed to auto-save swatch:", swatchSaveError);
+    }
+
     const preview = await prisma.preview.upsert({
       where: {
         productId_zoneId_fabricFamily_colourName: {
@@ -781,7 +856,7 @@ if (usage.previewCount >= usage.previewLimit) {
         },
       },
       update: {
-        swatchId,
+        swatchId: savedSwatchId,
         imagePath: uploaded.path,
         imageUrl: uploaded.publicUrl,
         width,
@@ -791,7 +866,7 @@ if (usage.previewCount >= usage.previewLimit) {
         shopId: shop.id,
         productId: product.id,
         zoneId: zone.id,
-        swatchId,
+        swatchId: savedSwatchId,
         shopifyProductId: productId,
         fabricFamily,
         colourName,

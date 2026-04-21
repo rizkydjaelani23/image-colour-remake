@@ -20,13 +20,15 @@ type RecentPreview = {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { billing, session } = await authenticate.admin(request);
 
+  const isTestBilling = process.env.NODE_ENV !== "production";
+
   await billing.require({
   plans: ["PRO_PLAN"],
-  isTest: true,
+  isTest: isTestBilling,
   onFailure: async () =>
     billing.request({
       plan: "PRO_PLAN",
-      isTest: true,
+      isTest: isTestBilling,
       trialDays: 3,
     }),
 });

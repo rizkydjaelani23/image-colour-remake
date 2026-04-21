@@ -71,6 +71,17 @@ export default function VisualiserPage() {
   const [activeZoneId, setActiveZoneId] = useState<string | null>(null);
   const [fabricName, setFabricName] = useState("");
   const [swatchFile, setSwatchFile] = useState<File | null>(null);
+  const [swatchUrl, setSwatchUrl] = useState<string | null>(null);
+  const [swatchSource, setSwatchSource] = useState<"file" | "url" | null>(null);
+  const [recentSwatches, setRecentSwatches] = useState<Array<{
+    id: string;
+    fabricFamily: string;
+    colourName: string;
+    imageUrl: string | null;
+    updatedAt: string;
+  }>>([]);
+  const [recentSwatchesLoading, setRecentSwatchesLoading] = useState(false);
+  const [selectedRecentSwatchIds, setSelectedRecentSwatchIds] = useState<string[]>([]);
   const [bulkSwatchFiles, setBulkSwatchFiles] = useState<File[]>([]);
   const [bulkPreviewLoading, setBulkPreviewLoading] = useState(false);
   const [bulkPreviewError, setBulkPreviewError] = useState<string | null>(null);
@@ -123,6 +134,8 @@ export default function VisualiserPage() {
       setMaskError(null);
       setFabricName("");
       setSwatchFile(null);
+      setSwatchUrl(null);
+      setSwatchSource(null);
       setZoom(1);
       setPan({ x: 0, y: 0 });
     } catch (err) {
@@ -569,6 +582,59 @@ export default function VisualiserPage() {
     clearPreviewCanvas();
   }
 
+  async function loadRecentSwatches() {
+    setRecentSwatchesLoading(true);
+    try {
+      const response = await fetch("/api/recent-swatches");
+      const data = await response.json();
+
+      if (response.ok && Array.isArray(data.swatches)) {
+        setRecentSwatches(data.swatches);
+      }
+    } catch (err) {
+      console.error("Failed to load recent swatches:", err);
+    } finally {
+      setRecentSwatchesLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadRecentSwatches();
+  }, []);
+
+  function toggleRecentSwatch(swatchId: string) {
+    setSelectedRecentSwatchIds((prev) => {
+      if (prev.includes(swatchId)) {
+        return prev.filter((id) => id !== swatchId);
+      }
+      return [...prev, swatchId];
+    });
+    setGeneratedPreviewUrl(null);
+    setPreviewError(null);
+    setBulkPreviewError(null);
+  }
+
+  function clearRecentSwatchSelection() {
+    setSelectedRecentSwatchIds([]);
+  }
+
+  // Legacy single-pick helper kept for clarity - not used in UI anymore
+  function selectRecentSwatch(swatch: {
+    colourName: string;
+    fabricFamily: string;
+    imageUrl: string | null;
+  }) {
+    if (!swatch.imageUrl) return;
+    setSwatchFile(null);
+    setSwatchUrl(swatch.imageUrl);
+    setSwatchSource("url");
+    if (!fabricName.trim()) {
+      setFabricName(swatch.colourName);
+    }
+    setGeneratedPreviewUrl(null);
+    setPreviewError(null);
+  }
+
   async function generatePreview() {
     if (!product) {
       setPreviewError("Please select a product first.");
@@ -590,8 +656,8 @@ export default function VisualiserPage() {
       return;
     }
 
-    if (!swatchFile) {
-      setPreviewError("Please upload a swatch image.");
+    if (!swatchFile && !swatchUrl) {
+      setPreviewError("Please upload a swatch, pick one from Shopify Files, or select a recent colour.");
       return;
     }
 
@@ -602,7 +668,11 @@ export default function VisualiserPage() {
       const formData = new FormData();
       formData.append("productId", product.id);
       formData.append("zoneId", activeZoneId);
-      formData.append("swatch", swatchFile);
+      if (swatchFile) {
+        formData.append("swatch", swatchFile);
+      } else if (swatchUrl) {
+        formData.append("swatchUrl", swatchUrl);
+      }
       formData.append("fabricFamily", "General");
       formData.append("colourName", fabricName.trim());
 
@@ -640,6 +710,8 @@ export default function VisualiserPage() {
         typeof (data as { preview: { url?: string } }).preview?.url === "string"
       ) {
         setGeneratedPreviewUrl((data as { preview: { url: string } }).preview.url);
+        // Refresh recent swatches so the one we just used appears at the top
+        loadRecentSwatches();
       } else {
         throw new Error("Preview URL was not returned.");
       }
@@ -672,8 +744,39 @@ export default function VisualiserPage() {
     return;
   }
 
-  if (bulkSwatchFiles.length === 0) {
-    setBulkPreviewError("Please upload at least 1 swatch file.");
+  // Build the combined list of jobs: selected recent swatches + uploaded files
+  type BulkJob =
+    | { kind: "file"; file: File; colourName: string }
+    | { kind: "url"; url: string; colourName: string; fabricFamily: string };
+
+  const jobs: BulkJob[] = [];
+
+  // Add recent swatches first (in selection order)
+  for (const swatchId of selectedRecentSwatchIds) {
+    const swatch = recentSwatches.find((s) => s.id === swatchId);
+    if (swatch && swatch.imageUrl) {
+      jobs.push({
+        kind: "url",
+        url: swatch.imageUrl,
+        colourName: swatch.colourName,
+        fabricFamily: swatch.fabricFamily || "General",
+      });
+    }
+  }
+
+  // Then add uploaded files
+  for (const file of bulkSwatchFiles) {
+    jobs.push({
+      kind: "file",
+      file,
+      colourName: file.name.replace(/\.[^/.]+$/, ""),
+    });
+  }
+
+  if (jobs.length === 0) {
+    setBulkPreviewError(
+      "Please select at least 1 recent colour or upload at least 1 swatch file.",
+    );
     return;
   }
 
@@ -682,7 +785,7 @@ export default function VisualiserPage() {
   setBulkPreviewResults([]);
   setSelectedBulkIndex(null);
 
-  const totalItems = bulkSwatchFiles.length;
+  const totalItems = jobs.length;
   const batchSize = 10;
   const { totalBatches: batches } = getBatchInfo(totalItems, batchSize);
 
@@ -696,21 +799,24 @@ export default function VisualiserPage() {
   const results: Array<{ fileName: string; previewUrl: string }> = [];
 
   try {
-    for (let i = 0; i < bulkSwatchFiles.length; i += batchSize) {
-      const batch = bulkSwatchFiles.slice(i, i + batchSize);
+    for (let i = 0; i < jobs.length; i += batchSize) {
+      const batch = jobs.slice(i, i + batchSize);
       const batchNumber = Math.floor(i / batchSize) + 1;
 
       setCurrentBatch(batchNumber);
 
-      for (const file of batch) {
-        const colourName = file.name.replace(/\.[^/.]+$/, "");
-
+      for (const job of batch) {
         const formData = new FormData();
         formData.append("productId", product.id);
         formData.append("zoneId", activeZoneId);
-        formData.append("swatch", file);
-        formData.append("fabricFamily", "General");
-        formData.append("colourName", colourName);
+        formData.append("fabricFamily", job.kind === "url" ? job.fabricFamily : "General");
+        formData.append("colourName", job.colourName);
+
+        if (job.kind === "file") {
+          formData.append("swatch", job.file);
+        } else {
+          formData.append("swatchUrl", job.url);
+        }
 
         const response = await fetch("/api/generate-preview", {
           method: "POST",
@@ -723,7 +829,7 @@ export default function VisualiserPage() {
         try {
           data = JSON.parse(rawText);
         } catch {
-          throw new Error(rawText || `Failed on ${file.name}`);
+          throw new Error(rawText || `Failed on ${job.colourName}`);
         }
 
         if (!response.ok) {
@@ -733,7 +839,7 @@ export default function VisualiserPage() {
             "error" in data &&
             typeof (data as { error: unknown }).error === "string"
               ? (data as { error: string }).error
-              : `Failed on ${file.name}`;
+              : `Failed on ${job.colourName}`;
 
           throw new Error(errorMessage);
         }
@@ -745,18 +851,22 @@ export default function VisualiserPage() {
           typeof (data as { preview: { url?: string } }).preview?.url === "string"
         ) {
           results.push({
-            fileName: file.name.replace(/\.[^/.]+$/, ""),
+            fileName: job.colourName,
             previewUrl: (data as { preview: { url: string } }).preview.url,
           });
 
           setBulkPreviewResults([...results]);
         } else {
-          throw new Error(`Preview URL missing for ${file.name}`);
+          throw new Error(`Preview URL missing for ${job.colourName}`);
         }
       }
 
       setGeneratedCount(results.length);
     }
+
+    // Refresh recent swatches and clear selection after successful bulk run
+    loadRecentSwatches();
+    setSelectedRecentSwatchIds([]);
 
     setGenerationNotice(
       "Preview generation finished. You can review all completed images in the Preview Manager."
@@ -1617,88 +1727,120 @@ const stepTextStyle: CSSProperties = {
                   )}
                 </div>
 
-                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "16px" }}>
-                  <button
-                    type="button"
-                    onClick={clearMask}
+                {/* ========== MASK ACTIONS ========== */}
+                <div style={{ marginBottom: "16px" }}>
+                  {/* Row 1: Edit mask + Clear mask side by side */}
+                  <div
                     style={{
-                      padding: "10px 14px",
-                      borderRadius: "8px",
-                      border: "1px solid #ccc",
-                      cursor: "pointer",
-                      minWidth: "104px",
-                      minHeight: "44px",
+                      display: "grid",
+                      gridTemplateColumns: maskLocked ? "1fr 1fr" : "1fr",
+                      gap: "8px",
+                      marginBottom: "8px",
                     }}
                   >
-                    Clear mask
-                  </button>
+                    {maskLocked && (
+                      <button
+                        type="button"
+                        onClick={editMask}
+                        style={{
+                          padding: "10px 14px",
+                          borderRadius: "8px",
+                          border: "1px solid #ccc",
+                          background: "#ffffff",
+                          cursor: "pointer",
+                          minHeight: "44px",
+                          fontWeight: 600,
+                        }}
+                      >
+                        Edit mask
+                      </button>
+                    )}
 
+                    <button
+                      type="button"
+                      onClick={clearMask}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: "8px",
+                        border: "1px solid #ccc",
+                        background: "#ffffff",
+                        cursor: "pointer",
+                        minHeight: "44px",
+                        fontWeight: 600,
+                      }}
+                    >
+                      Clear mask
+                    </button>
+                  </div>
+
+                  {/* Row 2: Save zone on its own line, full width, primary action */}
                   <button
                     type="button"
                     onClick={saveZone}
                     disabled={maskSaving || maskLocked}
                     style={{
-                      padding: "10px 14px",
+                      width: "100%",
+                      padding: "12px 14px",
                       borderRadius: "8px",
-                      border: "1px solid #ccc",
+                      border: maskLocked ? "1px solid #bbf7d0" : "1px solid #111827",
+                      background: maskLocked ? "#f0fdf4" : "#111827",
+                      color: maskLocked ? "#166534" : "#ffffff",
                       cursor: maskSaving || maskLocked ? "not-allowed" : "pointer",
-                      opacity: maskSaving || maskLocked ? 0.7 : 1,
-                      minWidth: "104px",
-                      minHeight: "44px",
+                      opacity: maskSaving ? 0.7 : 1,
+                      minHeight: "48px",
+                      fontWeight: 700,
+                      fontSize: "14px",
                     }}
                   >
-                    {maskSaving ? "Saving..." : maskLocked ? "Zone Saved" : "Save Area"}
+                    {maskSaving
+                      ? "Saving..."
+                      : maskLocked
+                      ? "✓ Zone saved"
+                      : "Save zone"}
                   </button>
 
-                  {maskLocked && (
-                    <button
-                      type="button"
-                      onClick={editMask}
-                      style={{
-                        padding: "10px 14px",
-                        borderRadius: "8px",
-                        border: "1px solid #ccc",
-                        cursor: "pointer",
-                        minWidth: "104px",
-                        minHeight: "44px",
-                      }}
-                    >
-                      Edit mask
-                    </button>
-                  )}
-
+                  {/* Outline-mode-specific secondary buttons (only visible when drawing an outline) */}
                   {(tool === "outline" || tool === "smart-outline") && !maskLocked && (
-                    <button
-                      type="button"
-                      onClick={undoLastOutlinePoint}
+                    <div
                       style={{
-                        padding: "10px 14px",
-                        borderRadius: "8px",
-                        border: "1px solid #ccc",
-                        cursor: "pointer",
-                        minWidth: "104px",
-                        minHeight: "44px",
+                        display: "grid",
+                        gridTemplateColumns: "1fr 1fr",
+                        gap: "8px",
+                        marginTop: "8px",
                       }}
                     >
-                      Undo point
-                    </button>
-                  )}
+                      <button
+                        type="button"
+                        onClick={undoLastOutlinePoint}
+                        style={{
+                          padding: "10px 14px",
+                          borderRadius: "8px",
+                          border: "1px solid #ccc",
+                          background: "#ffffff",
+                          cursor: "pointer",
+                          minHeight: "44px",
+                          fontWeight: 600,
+                        }}
+                      >
+                        Undo point
+                      </button>
 
-                  {(tool === "outline" || tool === "smart-outline") && !maskLocked && (
-                    <button
-                      type="button"
-                      onClick={clearCurrentOutline}
-                      style={{
-                        padding: "10px 14px",
-                        borderRadius: "8px",
-                        border: "1px solid #ccc",
-                        cursor: "pointer",
-                        minWidth: "104px",
-                        minHeight: "44px",
-                      }}
-                    >
-                      Clear outline
-                    </button>
+                      <button
+                        type="button"
+                        onClick={clearCurrentOutline}
+                        style={{
+                          padding: "10px 14px",
+                          borderRadius: "8px",
+                          border: "1px solid #ccc",
+                          background: "#ffffff",
+                          cursor: "pointer",
+                          minHeight: "44px",
+                          fontWeight: 600,
+                        }}
+                      >
+                        Clear outline
+                      </button>
+                    </div>
                   )}
 
                   {(tool === "outline" || tool === "smart-outline") && !maskLocked && (
@@ -1706,12 +1848,15 @@ const stepTextStyle: CSSProperties = {
                       type="button"
                       onClick={finishOutline}
                       style={{
+                        width: "100%",
+                        marginTop: "8px",
                         padding: "10px 14px",
                         borderRadius: "8px",
                         border: "1px solid #ccc",
+                        background: "#ffffff",
                         cursor: "pointer",
-                        minWidth: "104px",
                         minHeight: "44px",
+                        fontWeight: 600,
                       }}
                     >
                       Finish outline
@@ -1770,109 +1915,435 @@ const stepTextStyle: CSSProperties = {
                       </p>
                     )}
 
-                    <div style={{ marginBottom: "14px" }}>
-                      <label
-                        style={{
-                          display: "block",
-                          fontWeight: 600,
-                          marginBottom: "6px",
-                        }}
-                      >
-                        Upload swatch
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0] || null;
-                          setSwatchFile(file);
-                          setGeneratedPreviewUrl(null);
-                          setPreviewError(null);
-
-                          if (file && !fabricName.trim()) {
-                            const nameWithoutExtension = file.name.replace(/\.[^/.]+$/, "");
-                            setFabricName(nameWithoutExtension);
-                          }
-                        }}
-                      />
-                      <p style={{ marginTop: "8px", fontSize: "14px" }}>
-                        {swatchFile ? swatchFile.name : "No swatch selected"}
-                      </p>
-                    </div>
-
-                    <div style={{ marginTop: "18px", marginBottom: "14px" }}>
-                      <label style={{ display: "block", fontWeight: 600, marginBottom: "6px" }}>
-                        Upload multiple swatches
-                      </label>
-
-                      <input
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        onChange={(e) => {
-                          const files = Array.from(e.target.files || []).slice(0, 10);
-                          setBulkSwatchFiles(files);
-                          setBulkPreviewResults([]);
-                          setBulkPreviewError(null);
-                        }}
-                      />
-
-                      <p style={{ marginTop: "8px", fontSize: "14px" }}>
-                        {bulkSwatchFiles.length > 0
-                          ? `${bulkSwatchFiles.length} swatches selected`
-                          : "No bulk swatches selected"}
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={generatePreview}
-                      disabled={previewLoading}
-                      style={{
-                        padding: "10px 14px",
-                        borderRadius: "8px",
-                        border: "1px solid #ccc",
-                        cursor: previewLoading ? "not-allowed" : "pointer",
-                        opacity: previewLoading ? 0.7 : 1,
-                        minWidth: "104px",
-                        minHeight: "44px",
-                      }}
-                    >
-                      {previewLoading ? "Generating..." : "Create Colour Preview"}
-                    </button>
-
-                    <div style={{ marginTop: "12px" }}>
+                    {/* ===== RECENTLY USED COLOURS ===== */}
                     <div
                       style={{
                         marginBottom: "14px",
-                        padding: "14px 16px",
+                        padding: "14px",
                         borderRadius: "12px",
-                        background: "#f8fafc",
-                        border: "1px solid #e2e8f0",
+                        background: "#ffffff",
+                        border: "1px solid #e5e7eb",
                       }}
                     >
                       <div
                         style={{
-                          fontSize: "13px",
-                          fontWeight: 700,
-                          color: "#0f172a",
-                          marginBottom: "6px",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          marginBottom: "10px",
                         }}
                       >
-                        Batch processing
+                        <div
+                          style={{
+                            fontSize: "13px",
+                            fontWeight: 700,
+                            color: "#0f172a",
+                          }}
+                        >
+                          Recently used colours
+                        </div>
+                        {selectedRecentSwatchIds.length > 0 ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <div
+                              style={{
+                                fontSize: "12px",
+                                color: "#1d4ed8",
+                                fontWeight: 700,
+                              }}
+                            >
+                              {selectedRecentSwatchIds.length} selected
+                            </div>
+                            <button
+                              type="button"
+                              onClick={clearRecentSwatchSelection}
+                              style={{
+                                padding: "4px 10px",
+                                borderRadius: "6px",
+                                border: "1px solid #d1d5db",
+                                background: "#ffffff",
+                                color: "#111827",
+                                cursor: "pointer",
+                                fontSize: "12px",
+                                fontWeight: 600,
+                              }}
+                            >
+                              Clear all
+                            </button>
+                          </div>
+                        ) : (
+                          recentSwatches.length > 0 && (
+                            <div
+                              style={{
+                                fontSize: "12px",
+                                color: "#64748b",
+                                fontWeight: 600,
+                              }}
+                            >
+                              {recentSwatches.length}{" "}
+                              {recentSwatches.length === 1 ? "colour" : "colours"}
+                            </div>
+                          )
+                        )}
                       </div>
 
+                      {recentSwatches.length > 0 && (
+                        <div
+                          style={{
+                            fontSize: "12px",
+                            color: "#64748b",
+                            marginBottom: "10px",
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          Tap a colour to select it for bulk generation. Selected colours will be queued together with any swatches you upload below.
+                        </div>
+                      )}
+
+                      {recentSwatchesLoading && recentSwatches.length === 0 ? (
+                        <div style={{ fontSize: "13px", color: "#64748b" }}>
+                          Loading...
+                        </div>
+                      ) : recentSwatches.length === 0 ? (
+                        <div
+                          style={{
+                            fontSize: "13px",
+                            color: "#64748b",
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          No previous colours yet. Generate a preview and your swatch will be saved here automatically.
+                        </div>
+                      ) : (
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))",
+                            gap: "10px",
+                            maxHeight: "260px",
+                            overflowY: "auto",
+                            paddingRight: "4px",
+                          }}
+                        >
+                          {recentSwatches.map((swatch) => {
+                            const selectionIndex = selectedRecentSwatchIds.indexOf(swatch.id);
+                            const isSelected = selectionIndex >= 0;
+
+                            return (
+                              <button
+                                key={swatch.id}
+                                type="button"
+                                onClick={() => toggleRecentSwatch(swatch.id)}
+                                title={`${swatch.colourName} · ${swatch.fabricFamily}`}
+                                style={{
+                                  position: "relative",
+                                  padding: "4px",
+                                  borderRadius: "10px",
+                                  border: isSelected
+                                    ? "2px solid #1d4ed8"
+                                    : "1px solid #e5e7eb",
+                                  background: isSelected ? "#eff6ff" : "#ffffff",
+                                  cursor: "pointer",
+                                  textAlign: "left",
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  gap: "4px",
+                                }}
+                              >
+                                {isSelected && (
+                                  <div
+                                    style={{
+                                      position: "absolute",
+                                      top: "6px",
+                                      right: "6px",
+                                      width: "22px",
+                                      height: "22px",
+                                      borderRadius: "50%",
+                                      background: "#1d4ed8",
+                                      color: "#ffffff",
+                                      fontSize: "12px",
+                                      fontWeight: 800,
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                                      zIndex: 1,
+                                    }}
+                                  >
+                                    {selectionIndex + 1}
+                                  </div>
+                                )}
+                                <div
+                                  style={{
+                                    width: "100%",
+                                    aspectRatio: "1 / 1",
+                                    borderRadius: "6px",
+                                    overflow: "hidden",
+                                    background: "#f8fafc",
+                                  }}
+                                >
+                                  {swatch.imageUrl ? (
+                                    <img
+                                      src={swatch.imageUrl}
+                                      alt={swatch.colourName}
+                                      style={{
+                                        width: "100%",
+                                        height: "100%",
+                                        objectFit: "cover",
+                                        display: "block",
+                                      }}
+                                    />
+                                  ) : (
+                                    <div
+                                      style={{
+                                        width: "100%",
+                                        height: "100%",
+                                        background: "#e5e7eb",
+                                      }}
+                                    />
+                                  )}
+                                </div>
+                                <div
+                                  style={{
+                                    fontSize: "11px",
+                                    fontWeight: 700,
+                                    color: "#0f172a",
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    padding: "0 2px",
+                                  }}
+                                >
+                                  {swatch.colourName}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ========== SINGLE PREVIEW CARD ========== */}
+                    <div
+                      style={{
+                        marginBottom: "16px",
+                        padding: "16px",
+                        borderRadius: "12px",
+                        background: "#ffffff",
+                        border: "1px solid #e5e7eb",
+                      }}
+                    >
                       <div
                         style={{
                           fontSize: "14px",
-                          lineHeight: 1.6,
-                          color: "#475569",
+                          fontWeight: 700,
+                          color: "#0f172a",
+                          marginBottom: "4px",
                         }}
                       >
-                        Previews are generated in batches of 10 to ensure fast and stable performance.
-                        You can continue working while previews are being processed and view completed images in the Preview Manager.
+                        Single preview
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "12px",
+                          color: "#64748b",
+                          marginBottom: "12px",
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        Upload one swatch to create a single preview right now.
                       </div>
 
+                      <div style={{ marginBottom: "12px" }}>
+                        <label
+                          style={{
+                            display: "block",
+                            fontWeight: 600,
+                            marginBottom: "6px",
+                            fontSize: "13px",
+                          }}
+                        >
+                          Upload swatch
+                        </label>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0] || null;
+                            setSwatchFile(file);
+                            setSwatchUrl(null);
+                            setSwatchSource(file ? "file" : null);
+                            setGeneratedPreviewUrl(null);
+                            setPreviewError(null);
+
+                            if (file && !fabricName.trim()) {
+                              const nameWithoutExtension = file.name.replace(/\.[^/.]+$/, "");
+                              setFabricName(nameWithoutExtension);
+                            }
+                          }}
+                        />
+
+                        {swatchSource === "file" && swatchFile && (
+                          <p style={{ marginTop: "8px", fontSize: "13px", color: "#166534", fontWeight: 600 }}>
+                            ✓ {swatchFile.name}
+                          </p>
+                        )}
+
+                        {!swatchSource && (
+                          <p style={{ marginTop: "8px", fontSize: "13px", color: "#64748b" }}>
+                            No swatch selected
+                          </p>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={generatePreview}
+                        disabled={previewLoading}
+                        style={{
+                          width: "100%",
+                          padding: "12px 14px",
+                          borderRadius: "8px",
+                          border: "1px solid #111827",
+                          background: "#111827",
+                          color: "#ffffff",
+                          cursor: previewLoading ? "not-allowed" : "pointer",
+                          opacity: previewLoading ? 0.7 : 1,
+                          minHeight: "44px",
+                          fontWeight: 700,
+                          fontSize: "14px",
+                        }}
+                      >
+                        {previewLoading ? "Generating..." : "Create single preview"}
+                      </button>
+
+                      {previewError && (
+                        <p style={{ marginTop: "10px", color: "crimson", fontWeight: 600, fontSize: "13px" }}>
+                          {previewError}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* ========== BULK PREVIEW CARD ========== */}
+                    <div
+                      style={{
+                        marginBottom: "16px",
+                        padding: "16px",
+                        borderRadius: "12px",
+                        background: "#ffffff",
+                        border: "1px solid #e5e7eb",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: "14px",
+                          fontWeight: 700,
+                          color: "#0f172a",
+                          marginBottom: "4px",
+                        }}
+                      >
+                        Bulk preview
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "12px",
+                          color: "#64748b",
+                          marginBottom: "12px",
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        Queue multiple swatches — selected recent colours plus any new files you upload — and the app will generate them in batches of 10.
+                      </div>
+
+                      <div style={{ marginBottom: "12px" }}>
+                        <label
+                          style={{
+                            display: "block",
+                            fontWeight: 600,
+                            marginBottom: "6px",
+                            fontSize: "13px",
+                          }}
+                        >
+                          Upload new swatches (optional)
+                        </label>
+
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={(e) => {
+                            const files = Array.from(e.target.files || []).slice(0, 10);
+                            setBulkSwatchFiles(files);
+                            setBulkPreviewResults([]);
+                            setBulkPreviewError(null);
+                          }}
+                        />
+
+                        <p style={{ marginTop: "8px", fontSize: "13px", color: "#64748b" }}>
+                          {bulkSwatchFiles.length > 0
+                            ? `${bulkSwatchFiles.length} new ${bulkSwatchFiles.length === 1 ? "file" : "files"} ready`
+                            : "No new files"}
+                        </p>
+                      </div>
+
+                      {/* Queue summary */}
+                      {(selectedRecentSwatchIds.length > 0 || bulkSwatchFiles.length > 0) && (
+                        <div
+                          style={{
+                            marginBottom: "12px",
+                            padding: "10px 12px",
+                            borderRadius: "8px",
+                            background: "#eff6ff",
+                            border: "1px solid #bfdbfe",
+                            fontSize: "13px",
+                            color: "#1d4ed8",
+                            fontWeight: 600,
+                          }}
+                        >
+                          Queue: {selectedRecentSwatchIds.length + bulkSwatchFiles.length} total
+                          {selectedRecentSwatchIds.length > 0 &&
+                            ` (${selectedRecentSwatchIds.length} recent${bulkSwatchFiles.length > 0 ? `, ${bulkSwatchFiles.length} new` : ""})`}
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={generateBulkPreviews}
+                        disabled={
+                          bulkPreviewLoading ||
+                          (bulkSwatchFiles.length === 0 && selectedRecentSwatchIds.length === 0)
+                        }
+                        style={{
+                          width: "100%",
+                          padding: "12px 14px",
+                          borderRadius: "8px",
+                          border: "1px solid #111827",
+                          background:
+                            bulkPreviewLoading ||
+                            (bulkSwatchFiles.length === 0 && selectedRecentSwatchIds.length === 0)
+                              ? "#9ca3af"
+                              : "#111827",
+                          color: "#ffffff",
+                          cursor:
+                            bulkPreviewLoading ||
+                            (bulkSwatchFiles.length === 0 && selectedRecentSwatchIds.length === 0)
+                              ? "not-allowed"
+                              : "pointer",
+                          opacity:
+                            bulkPreviewLoading ||
+                            (bulkSwatchFiles.length === 0 && selectedRecentSwatchIds.length === 0)
+                              ? 0.8
+                              : 1,
+                          minHeight: "44px",
+                          fontWeight: 700,
+                          fontSize: "14px",
+                        }}
+                      >
+                        {bulkPreviewLoading
+                          ? "Generating previews..."
+                          : "Generate bulk previews"}
+                      </button>
+
+                      {/* Progress / status */}
                       {bulkPreviewLoading && totalBatches > 0 && (
                         <div
                           style={{
@@ -1901,38 +2372,28 @@ const stepTextStyle: CSSProperties = {
                           {generationNotice}
                         </div>
                       )}
-                    </div>
-                      <button
-                        type="button"
-                        onClick={generateBulkPreviews}
-                        disabled={bulkPreviewLoading || bulkSwatchFiles.length === 0}
+
+                      {bulkPreviewError && (
+                        <p style={{ marginTop: "10px", color: "crimson", fontWeight: 600, fontSize: "13px" }}>
+                          {bulkPreviewError}
+                        </p>
+                      )}
+
+                      <div
                         style={{
-                          padding: "10px 14px",
+                          marginTop: "12px",
+                          padding: "10px 12px",
                           borderRadius: "8px",
-                          border: "1px solid #ccc",
-                          cursor:
-                            bulkPreviewLoading || bulkSwatchFiles.length === 0
-                              ? "not-allowed"
-                              : "pointer",
-                          opacity: bulkPreviewLoading || bulkSwatchFiles.length === 0 ? 0.7 : 1,
-                          minWidth: "180px",
-                          minHeight: "44px",
+                          background: "#f8fafc",
+                          border: "1px solid #e2e8f0",
+                          fontSize: "12px",
+                          color: "#475569",
+                          lineHeight: 1.5,
                         }}
                       >
-                        {bulkPreviewLoading ? "Generating previews..." : "Generate previews in batches"}
-                      </button>
+                        Previews are generated in batches of 10 for performance. Completed previews appear in the Preview Manager.
+                      </div>
                     </div>
-
-                    <p style={{ marginTop: "12px", fontSize: "14px", color: "#555" }}>
-                      <strong>Bulk uploads available.</strong> Upload multiple swatches and the app will
-                      generate previews in batches of 10. Completed previews will appear in the Preview Manager.
-                    </p>
-
-                    {previewError && (
-                      <p style={{ color: "crimson", fontWeight: 600 }}>
-                        {previewError}
-                      </p>
-                    )}
                   </div>
                 )}
               </div>
