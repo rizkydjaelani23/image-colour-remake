@@ -318,18 +318,20 @@ async function buildRealisticComposite(params: {
         .toBuffer();
 
       const textureLight = await sharp(softenedTextureForBlend)
-        .linear(renderMode === "smooth-colour" ? 0.005 : 0.06, 0)
+        .linear(renderMode === "smooth-colour" ? 0.05 : 0.15, renderMode === "smooth-colour" ? 122 : 109)
         .png()
         .toBuffer();
 
+      // For soft-texture fabrics: the soft-light blend desaturates colour heavily,
+      // so we apply less lighting and then boost saturation back to preserve chroma.
       const colouredFabric = await sharp(mainFabricLayer)
         .composite([
           { input: maskedLighting, blend: "soft-light" },
           { input: textureLight, blend: "soft-light" },
         ])
         .modulate({
-          brightness: renderMode === "smooth-colour" ? 0.97 : 0.99,
-          saturation: renderMode === "smooth-colour" ? 1.02 : 1.03,
+          brightness: renderMode === "smooth-colour" ? 0.90 : 0.99,
+          saturation: renderMode === "smooth-colour" ? 1.02 : 1.20,
         })
         .gamma(1.01)
         .png()
@@ -387,7 +389,7 @@ async function buildRealisticComposite(params: {
 
     // Neutralise only inside the fabric area
         const lum = Math.round(0.299 * br + 0.587 * bg + 0.114 * bb);
-        const neutralMix = 0.0 * maskValue;
+        const neutralMix = renderMode === "smooth-colour" ? 0.0 : 0.65 * maskValue;
 
     const nr = Math.round(br * (1 - neutralMix) + lum * neutralMix);
     const ng = Math.round(bg * (1 - neutralMix) + lum * neutralMix);
@@ -763,7 +765,7 @@ if (now > usage.periodEnd) {
     const maskBuffer = await createProcessedMask(rawMaskBuffer, width, height);
 
     const tileScale = 0.14;
-    const blendStrength = 0.58;
+    const blendStrength = 0.75;
 
     const finalComposite = await buildRealisticComposite({
       baseBuffer,
