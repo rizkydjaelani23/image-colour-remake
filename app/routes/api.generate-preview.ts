@@ -679,12 +679,12 @@ if (now > usage.periodEnd) {
   });
 }
 
-//if (usage.previewCount >= usage.previewLimit) {
- // return Response.json(
-  //  { error: "Preview limit reached for this billing cycle." },
-  //  { status: 403 },
- // );
-// }
+if (usage.previewCount >= usage.previewLimit) {
+  return Response.json(
+    { error: "Preview limit reached for this billing cycle." },
+    { status: 403 },
+  );
+}
 
     const product = await prisma.product.findFirst({
       where: {
