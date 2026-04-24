@@ -17,12 +17,56 @@ type RecentPreview = {
 
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
 
   const shop = await getOrCreateShop(session.shop);
 
-  const usage = await prisma.shopUsage.findUnique({
+  // ── Check merchant's active subscription via GraphQL ──
+  // With Managed Pricing, Shopify handles plan selection.
+  // We just query whether the merchant has an active subscription.
+  let planName = "Free";
+  let previewLimit = 50;
+
+  try {
+    const subscriptionResponse = await admin.graphql(`
+      {
+        currentAppInstallation {
+          activeSubscriptions {
+            name
+            status
+          }
+        }
+      }
+    `);
+
+    const subscriptionData = await subscriptionResponse.json();
+    const subs =
+      subscriptionData?.data?.currentAppInstallation?.activeSubscriptions || [];
+
+    const activeSub = subs.find(
+      (s: { status: string }) => s.status === "ACTIVE",
+    );
+
+    if (activeSub) {
+      planName = activeSub.name || "Pro";
+      previewLimit = 999999; // effectively unlimited
+    }
+  } catch (err) {
+    console.error("Failed to check subscription:", err);
+    // Default to Free if query fails
+  }
+
+  // ── Sync usage record with correct limit based on plan ──
+  const usage = await prisma.shopUsage.upsert({
     where: { shopId: shop.id },
+    create: {
+      shopId: shop.id,
+      previewCount: 0,
+      previewLimit,
+    },
+    update: {
+      previewLimit,
+    },
   });
 
   const recentPreviewsRaw = await prisma.preview.findMany({
@@ -51,6 +95,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return {
     recentPreviews,
     usage,
+    planName,
   };
 }
 
@@ -141,7 +186,12 @@ function pillStyle(active: boolean, blue = false): CSSProperties {
 }
 
 export default function Index() {
-  const { recentPreviews, usage } = useLoaderData<typeof loader>();
+  const { recentPreviews, usage, planName } = useLoaderData<typeof loader>();
+
+  const isPro = planName !== "Free";
+  const usageText = isPro
+    ? `${usage?.previewCount ?? 0} generated`
+    : `${usage?.previewCount ?? 0} / ${usage?.previewLimit ?? 50}`;
 
   return (
     <div style={pageStyle}>
@@ -309,10 +359,10 @@ export default function Index() {
 
         <div style={{ display: "grid", gap: "12px" }}>
           {[
-            "1. Go to Online Store → Themes",
+            "1. Go to Online Store \u2192 Themes",
             "2. Click Customize on your active theme",
             "3. Open a product template",
-            "4. Click Add block → Apps → Image Colour Remake",
+            "4. Click Add block \u2192 Apps \u2192 Image Colour Remake",
             "5. Position the block where you want it",
             "6. Click Save",
             "7. Open your product page to see all generated colour previews",
@@ -350,27 +400,87 @@ export default function Index() {
         </div>
       </div>
 
+      {/* ── Plan + Usage stats ── */}
       <div
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
           gap: "16px",
-          marginBottom: "22px",
+          margin: "22px 0",
         }}
       >
+        {/* Plan card */}
+        <div style={statCardStyle}>
+          <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 700, marginBottom: "8px" }}>
+            CURRENT PLAN
+          </div>
+          <div
+            style={{
+              fontSize: "22px",
+              fontWeight: 800,
+              color: isPro ? "#166534" : "#0f172a",
+              marginBottom: "6px",
+            }}
+          >
+            {isPro ? planName : "Free"}
+          </div>
+          <div style={{ fontSize: "14px", color: "#475569", lineHeight: 1.6, marginBottom: isPro ? "0" : "12px" }}>
+            {isPro
+              ? "Unlimited preview generation."
+              : "Up to 50 previews per billing cycle."}
+          </div>
+          {!isPro && (
+            <div
+              style={{
+                padding: "10px 14px",
+                borderRadius: "10px",
+                background: "#eef2ff",
+                border: "1px solid #c7d2fe",
+                fontSize: "13px",
+                color: "#3730a3",
+                fontWeight: 600,
+                lineHeight: 1.5,
+              }}
+            >
+              Need more previews? Upgrade to Pro ($29.99/mo) from the app listing in your Shopify admin under Apps {"\u2192"} Image Colour Remake {"\u2192"} About this app.
+            </div>
+          )}
+        </div>
+
+        {/* Usage card */}
         <div style={statCardStyle}>
           <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 700, marginBottom: "8px" }}>
             USAGE
           </div>
-
           <div style={{ fontSize: "22px", fontWeight: 800, color: "#0f172a", marginBottom: "6px" }}>
-            {usage ? `${usage.previewCount} / ${usage.previewLimit}` : "0 / 50"}
+            {usageText}
           </div>
-
           <div style={{ fontSize: "14px", color: "#475569", lineHeight: 1.6 }}>
-            Previews used this billing cycle.
+            {isPro
+              ? "Previews generated this billing cycle. No limit."
+              : "Previews used this billing cycle."}
           </div>
+          {!isPro && usage && usage.previewCount >= (usage.previewLimit ?? 50) * 0.8 && (
+            <div
+              style={{
+                marginTop: "10px",
+                padding: "8px 12px",
+                borderRadius: "10px",
+                background: "#fef3c7",
+                border: "1px solid #fde68a",
+                fontSize: "13px",
+                color: "#92400e",
+                fontWeight: 600,
+              }}
+            >
+              {usage.previewCount >= (usage.previewLimit ?? 50)
+                ? "Limit reached. Upgrade to Pro for unlimited previews."
+                : "Approaching limit. Consider upgrading to Pro."}
+            </div>
+          )}
         </div>
+
+        {/* Visualiser card */}
         <div style={statCardStyle}>
           <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 700, marginBottom: "8px" }}>
             MAIN TOOL
@@ -383,6 +493,7 @@ export default function Index() {
           </div>
         </div>
 
+        {/* Previews card */}
         <div style={statCardStyle}>
           <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 700, marginBottom: "8px" }}>
             PREVIEWS
@@ -395,6 +506,7 @@ export default function Index() {
           </div>
         </div>
 
+        {/* Storefront card */}
         <div style={statCardStyle}>
           <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 700, marginBottom: "8px" }}>
             STOREFRONT
@@ -404,18 +516,6 @@ export default function Index() {
           </div>
           <div style={{ fontSize: "14px", color: "#475569", lineHeight: 1.6 }}>
             Preview how approved colours will look to customers.
-          </div>
-        </div>
-
-        <div style={statCardStyle}>
-          <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 700, marginBottom: "8px" }}>
-            STATUS
-          </div>
-          <div style={{ fontSize: "22px", fontWeight: 800, color: "#0f172a", marginBottom: "6px" }}>
-            In active development
-          </div>
-          <div style={{ fontSize: "14px", color: "#475569", lineHeight: 1.6 }}>
-            Rendering, UI polish and storefront flow are being improved continuously.
           </div>
         </div>
       </div>
@@ -544,7 +644,7 @@ export default function Index() {
               }}
             >
               <span>Start a new product mask</span>
-              <span>→</span>
+              <span>{"\u2192"}</span>
             </Link>
 
             <Link
@@ -555,7 +655,7 @@ export default function Index() {
               }}
             >
               <span>Manage generated previews</span>
-              <span>→</span>
+              <span>{"\u2192"}</span>
             </Link>
 
             <Link
@@ -566,7 +666,7 @@ export default function Index() {
               }}
             >
               <span>Check storefront presentation</span>
-              <span>→</span>
+              <span>{"\u2192"}</span>
             </Link>
           </div>
 
