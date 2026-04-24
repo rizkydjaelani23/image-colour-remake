@@ -63,6 +63,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       shopId: shop.id,
       previewCount: 0,
       previewLimit,
+      periodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     },
     update: {
       previewLimit,
