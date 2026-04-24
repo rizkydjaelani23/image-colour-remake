@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { CSSProperties } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
@@ -10,14 +11,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const shop = await getOrCreateShop(session.shop);
 
-  // Check active subscription via GraphQL
   let planName = "Free";
+  let subscriptionId: string | null = null;
 
   try {
     const subscriptionResponse = await admin.graphql(`
       {
         currentAppInstallation {
           activeSubscriptions {
+            id
             name
             status
           }
@@ -35,6 +37,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     if (activeSub) {
       planName = activeSub.name || "Pro";
+      subscriptionId = activeSub.id;
     }
   } catch (err) {
     console.error("Failed to check subscription:", err);
@@ -46,8 +49,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   return {
     planName,
+    subscriptionId,
     previewCount: usage?.previewCount ?? 0,
     previewLimit: usage?.previewLimit ?? 50,
+    shopDomain: session.shop,
   };
 }
 
@@ -60,10 +65,60 @@ const pageStyle: CSSProperties = {
 };
 
 export default function Plans() {
-  const { planName, previewCount, previewLimit } =
+  const { planName, subscriptionId, previewCount, previewLimit, shopDomain } =
     useLoaderData<typeof loader>();
 
   const isPro = planName !== "Free";
+
+  const [cancelling, setCancelling] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [statusType, setStatusType] = useState<"success" | "error">("success");
+
+  async function handleDowngrade() {
+    if (
+      !confirm(
+        "Are you sure you want to downgrade to the Free plan? Your preview limit will be reduced to 50 per billing cycle.",
+      )
+    ) {
+      return;
+    }
+
+    setCancelling(true);
+    setStatusMessage(null);
+
+    try {
+      const response = await fetch("/api/cancel-subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setStatusType("success");
+        setStatusMessage(
+          "Plan changed to Free. This page will refresh in a moment.",
+        );
+        setTimeout(() => window.location.reload(), 2000);
+      } else {
+        setStatusType("error");
+        setStatusMessage(data.error || "Failed to change plan.");
+      }
+    } catch {
+      setStatusType("error");
+      setStatusMessage("Something went wrong. Please try again.");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  function handleUpgrade() {
+    // With Managed Pricing, upgrades are handled on the app's page in Shopify admin.
+    // Open the app's admin page where Shopify shows plan options.
+    const appSlug = "image-colour-remake-2";
+    const upgradeUrl = `https://${shopDomain}/admin/apps/${appSlug}`;
+    window.open(upgradeUrl, "_top");
+  }
 
   return (
     <div style={pageStyle}>
@@ -86,10 +141,30 @@ export default function Plans() {
             lineHeight: 1.6,
           }}
         >
-          Choose the plan that fits your needs. Upgrade or downgrade anytime
-          from the Shopify admin.
+          Choose the plan that fits your needs. Changes take effect immediately.
         </p>
       </div>
+
+      {/* Status message */}
+      {statusMessage && (
+        <div
+          style={{
+            padding: "14px 18px",
+            borderRadius: "12px",
+            marginBottom: "20px",
+            background: statusType === "success" ? "#f0fdf4" : "#fef2f2",
+            border:
+              statusType === "success"
+                ? "1px solid #bbf7d0"
+                : "1px solid #fecaca",
+            color: statusType === "success" ? "#166534" : "#991b1b",
+            fontSize: "14px",
+            fontWeight: 600,
+          }}
+        >
+          {statusMessage}
+        </div>
+      )}
 
       {/* Current usage summary */}
       <div
@@ -145,7 +220,9 @@ export default function Plans() {
               color: "#0f172a",
             }}
           >
-            {isPro ? `${previewCount} generated` : `${previewCount} / ${previewLimit}`}
+            {isPro
+              ? `${previewCount} generated`
+              : `${previewCount} / ${previewLimit}`}
           </div>
         </div>
       </div>
@@ -268,7 +345,7 @@ export default function Plans() {
             ))}
           </div>
 
-          {!isPro && (
+          {!isPro ? (
             <div
               style={{
                 marginTop: "20px",
@@ -284,6 +361,28 @@ export default function Plans() {
             >
               {"\u2713"} Active
             </div>
+          ) : (
+            <button
+              type="button"
+              onClick={handleDowngrade}
+              disabled={cancelling}
+              style={{
+                marginTop: "20px",
+                padding: "12px 16px",
+                borderRadius: "12px",
+                background: "#ffffff",
+                border: "1px solid #d1d5db",
+                textAlign: "center",
+                fontSize: "14px",
+                fontWeight: 700,
+                color: "#111827",
+                cursor: cancelling ? "not-allowed" : "pointer",
+                opacity: cancelling ? 0.6 : 1,
+                width: "100%",
+              }}
+            >
+              {cancelling ? "Changing plan..." : "Downgrade to Free"}
+            </button>
           )}
         </div>
 
@@ -298,7 +397,6 @@ export default function Plans() {
             padding: "28px",
             display: "flex",
             flexDirection: "column",
-            position: "relative",
           }}
         >
           {isPro ? (
@@ -439,20 +537,25 @@ export default function Plans() {
               {"\u2713"} Active
             </div>
           ) : (
-            <div
+            <button
+              type="button"
+              onClick={handleUpgrade}
               style={{
                 marginTop: "20px",
                 padding: "14px 16px",
                 borderRadius: "12px",
                 background: "#111827",
+                border: "1px solid #111827",
                 color: "#ffffff",
                 textAlign: "center",
                 fontSize: "14px",
                 fontWeight: 700,
+                cursor: "pointer",
+                width: "100%",
               }}
             >
-              Upgrade from your Shopify admin
-            </div>
+              Upgrade to Pro
+            </button>
           )}
         </div>
       </div>
@@ -475,7 +578,7 @@ export default function Plans() {
             marginBottom: "8px",
           }}
         >
-          How to change your plan
+          How billing works
         </div>
         <div
           style={{
@@ -484,11 +587,10 @@ export default function Plans() {
             lineHeight: 1.7,
           }}
         >
-          Plan changes are managed directly through Shopify. To upgrade or
-          downgrade, go to your Shopify admin {"\u2192"} Settings {"\u2192"} Apps
-          and sales channels {"\u2192"} Image Colour Remake {"\u2192"} choose
-          your plan. Changes take effect immediately and billing is prorated by
-          Shopify.
+          Billing is managed by Shopify. When you upgrade, you'll be taken to
+          Shopify's confirmation page where you can review and approve the
+          charge. Downgrading cancels your current subscription immediately. All
+          charges are prorated by Shopify — you only pay for what you use.
         </div>
       </div>
     </div>
