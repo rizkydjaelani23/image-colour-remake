@@ -2,6 +2,7 @@
 
 client_id = "1a5286ed899dfdc56653f2801f2c3b7f"
 name = "Image Colour Remake"
+handle = "image-colour-remake-2"
 application_url = "https://image-colour-remake-production.up.railway.app"
 embedded = true
 

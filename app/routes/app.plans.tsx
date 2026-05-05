@@ -3,56 +3,30 @@ import type { CSSProperties } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
-import prisma from "../utils/db.server";
 import { getOrCreateShop } from "../utils/shop.server";
+import {
+  getCurrentBillingPlan,
+  getManagedPricingUrl,
+} from "../utils/billing.server";
+import { syncShopUsage } from "../utils/usage.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
 
   const shop = await getOrCreateShop(session.shop);
 
-  let planName = "Free";
-  let subscriptionId: string | null = null;
-
-  try {
-    const subscriptionResponse = await admin.graphql(`
-      {
-        currentAppInstallation {
-          activeSubscriptions {
-            id
-            name
-            status
-          }
-        }
-      }
-    `);
-
-    const subscriptionData = await subscriptionResponse.json();
-    const subs =
-      subscriptionData?.data?.currentAppInstallation?.activeSubscriptions || [];
-
-    const activeSub = subs.find(
-      (s: { status: string }) => s.status === "ACTIVE",
-    );
-
-    if (activeSub) {
-      planName = activeSub.name || "Pro";
-      subscriptionId = activeSub.id;
-    }
-  } catch (err) {
-    console.error("Failed to check subscription:", err);
-  }
-
-  const usage = await prisma.shopUsage.findUnique({
-    where: { shopId: shop.id },
+  const { planName, previewLimit } = await getCurrentBillingPlan(admin);
+  const usage = await syncShopUsage({
+    shopId: shop.id,
+    previewLimit,
+    resetExpiredCycle: true,
   });
 
   return {
     planName,
-    subscriptionId,
     previewCount: usage?.previewCount ?? 0,
     previewLimit: usage?.previewLimit ?? 50,
-    shopDomain: session.shop,
+    managedPricingUrl: getManagedPricingUrl(session.shop),
   };
 }
 
@@ -65,59 +39,39 @@ const pageStyle: CSSProperties = {
 };
 
 export default function Plans() {
-  const { planName, subscriptionId, previewCount, previewLimit, shopDomain } =
+  const { planName, previewCount, previewLimit, managedPricingUrl } =
     useLoaderData<typeof loader>();
 
   const isPro = planName !== "Free";
 
-  const [cancelling, setCancelling] = useState(false);
+  const [redirectingPlan, setRedirectingPlan] = useState<"free" | "pro" | null>(
+    null,
+  );
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [statusType, setStatusType] = useState<"success" | "error">("success");
+  const [statusType] = useState<"success" | "error">("success");
 
-  async function handleDowngrade() {
+  function openBilling(plan: "free" | "pro") {
+    setRedirectingPlan(plan);
+    setStatusMessage(
+      "Opening Shopify billing so you can review the plan change.",
+    );
+    window.open(managedPricingUrl, "_top");
+  }
+
+  function handleDowngrade() {
     if (
       !confirm(
-        "Are you sure you want to downgrade to the Free plan? Your preview limit will be reduced to 50 per billing cycle.",
+        "Open Shopify billing to change to the Free plan? Your preview limit will be reduced to 50 per billing cycle when Shopify completes the plan change.",
       )
     ) {
       return;
     }
 
-    setCancelling(true);
-    setStatusMessage(null);
-
-    try {
-      const response = await fetch("/api/cancel-subscription", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setStatusType("success");
-        setStatusMessage(
-          "Plan changed to Free. This page will refresh in a moment.",
-        );
-        setTimeout(() => window.location.reload(), 2000);
-      } else {
-        setStatusType("error");
-        setStatusMessage(data.error || "Failed to change plan.");
-      }
-    } catch {
-      setStatusType("error");
-      setStatusMessage("Something went wrong. Please try again.");
-    } finally {
-      setCancelling(false);
-    }
+    openBilling("free");
   }
 
   function handleUpgrade() {
-    // With Managed Pricing, upgrades are handled on the app's page in Shopify admin.
-    // Open the app's admin page where Shopify shows plan options.
-    const appSlug = "image-colour-remake-2";
-    const upgradeUrl = `https://${shopDomain}/admin/apps/${appSlug}`;
-    window.open(upgradeUrl, "_top");
+    openBilling("pro");
   }
 
   return (
@@ -141,7 +95,8 @@ export default function Plans() {
             lineHeight: 1.6,
           }}
         >
-          Choose the plan that fits your needs. Changes take effect immediately.
+          Choose the plan that fits your needs. Shopify will ask you to approve
+          paid charges before they start.
         </p>
       </div>
 
@@ -365,7 +320,7 @@ export default function Plans() {
             <button
               type="button"
               onClick={handleDowngrade}
-              disabled={cancelling}
+              disabled={redirectingPlan === "free"}
               style={{
                 marginTop: "20px",
                 padding: "12px 16px",
@@ -376,12 +331,14 @@ export default function Plans() {
                 fontSize: "14px",
                 fontWeight: 700,
                 color: "#111827",
-                cursor: cancelling ? "not-allowed" : "pointer",
-                opacity: cancelling ? 0.6 : 1,
+                cursor: redirectingPlan === "free" ? "not-allowed" : "pointer",
+                opacity: redirectingPlan === "free" ? 0.6 : 1,
                 width: "100%",
               }}
             >
-              {cancelling ? "Changing plan..." : "Downgrade to Free"}
+              {redirectingPlan === "free"
+                ? "Opening Shopify billing..."
+                : "Downgrade to Free"}
             </button>
           )}
         </div>
@@ -540,6 +497,7 @@ export default function Plans() {
             <button
               type="button"
               onClick={handleUpgrade}
+              disabled={redirectingPlan === "pro"}
               style={{
                 marginTop: "20px",
                 padding: "14px 16px",
@@ -550,11 +508,14 @@ export default function Plans() {
                 textAlign: "center",
                 fontSize: "14px",
                 fontWeight: 700,
-                cursor: "pointer",
+                cursor: redirectingPlan === "pro" ? "not-allowed" : "pointer",
+                opacity: redirectingPlan === "pro" ? 0.7 : 1,
                 width: "100%",
               }}
             >
-              Upgrade to Pro
+              {redirectingPlan === "pro"
+                ? "Opening Shopify billing..."
+                : "Upgrade to Pro"}
             </button>
           )}
         </div>
@@ -587,10 +548,11 @@ export default function Plans() {
             lineHeight: 1.7,
           }}
         >
-          Billing is managed by Shopify. When you upgrade, you'll be taken to
-          Shopify's confirmation page where you can review and approve the
-          charge. Downgrading cancels your current subscription immediately. All
-          charges are prorated by Shopify — you only pay for what you use.
+          Billing is managed by Shopify. When you change plans, you'll be taken
+          to Shopify's hosted plan selection page where you can review,
+          approve, or decline plan charges. Shopify handles proration, test
+          subscriptions for development stores, and approval if the app is
+          reinstalled.
         </div>
       </div>
     </div>

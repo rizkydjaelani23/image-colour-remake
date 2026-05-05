@@ -79,6 +79,7 @@ Create a `.env` file in the project root:
 SHOPIFY_API_KEY=your_api_key
 SHOPIFY_API_SECRET=your_api_secret
 SHOPIFY_APP_URL=https://your-production-url.up.railway.app
+SHOPIFY_APP_HANDLE=image-colour-remake-2
 
 DATABASE_URL=postgresql://user:password@host:port/dbname
 

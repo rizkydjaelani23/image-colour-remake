@@ -8,6 +8,8 @@ import prisma from "../utils/db.server";
 import { upsertProduct } from "../utils/products.server";
 import { getOrCreateShop } from "../utils/shop.server";
 import { uploadBufferToStorage } from "../utils/storage.server";
+import { getCurrentBillingPlan } from "../utils/billing.server";
+import { syncShopUsage } from "../utils/usage.server";
 import { safeFolderName } from "../utils/visualiser.server";
 
 async function tileSwatchToSize(
@@ -594,7 +596,7 @@ function slugify(value: string) {
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
-    const { session } = await authenticate.admin(request);
+    const { session, admin } = await authenticate.admin(request);
     const shopDomain = session.shop;
 
     const formData = await request.formData();
@@ -650,34 +652,12 @@ export async function action({ request }: ActionFunctionArgs) {
 
     const shop = await getOrCreateShop(shopDomain);
 
-    const now = new Date();
-
-let usage = await prisma.shopUsage.findUnique({
-  where: { shopId: shop.id },
-});
-
-if (!usage) {
-  usage = await prisma.shopUsage.create({
-    data: {
+    const { previewLimit } = await getCurrentBillingPlan(admin);
+    const usage = await syncShopUsage({
       shopId: shop.id,
-      previewCount: 0,
-      previewLimit: 50,
-      periodStart: now,
-      periodEnd: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
-    },
-  });
-}
-
-if (now > usage.periodEnd) {
-  usage = await prisma.shopUsage.update({
-    where: { shopId: shop.id },
-    data: {
-      previewCount: 0,
-      periodStart: now,
-      periodEnd: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
-    },
-  });
-}
+      previewLimit,
+      resetExpiredCycle: true,
+    });
 
 if (usage.previewCount >= usage.previewLimit) {
   return Response.json(
