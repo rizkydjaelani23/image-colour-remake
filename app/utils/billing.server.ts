@@ -6,6 +6,12 @@ type ShopifyAdminClient = {
   graphql: (query: string) => Promise<Response>;
 };
 
+function isFreePlanName(planName: string | null | undefined) {
+  const normalizedName = (planName || "").trim().toLowerCase();
+
+  return normalizedName === "free" || normalizedName === "free plan";
+}
+
 export function getStoreHandle(shopDomain: string) {
   const normalizedShop = shopDomain.trim().toLowerCase();
   const myshopifySuffix = ".myshopify.com";
@@ -54,7 +60,7 @@ export async function getCurrentBillingPlan(admin: ShopifyAdminClient) {
       (subscription: { status: string }) => subscription.status === "ACTIVE",
     );
 
-    if (activeSub) {
+    if (activeSub && !isFreePlanName(activeSub.name)) {
       planName = activeSub.name || "Pro";
       previewLimit = PRO_PREVIEW_LIMIT;
     }

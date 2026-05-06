@@ -4,6 +4,8 @@ import { Link, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
 import { getOrCreateShop } from "../utils/shop.server";
+import { getCurrentBillingPlan } from "../utils/billing.server";
+import { syncShopUsage } from "../utils/usage.server";
 
 type RecentPreview = {
   id: string;
@@ -22,54 +24,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const shop = await getOrCreateShop(session.shop);
 
   // ── Check merchant's active subscription via GraphQL ──
-  // With Managed Pricing, Shopify handles plan selection.
-  // We just query whether the merchant has an active subscription.
-  let planName = "Free";
-  let previewLimit = 50;
-
-  try {
-    const subscriptionResponse = await admin.graphql(`
-      {
-        currentAppInstallation {
-          activeSubscriptions {
-            name
-            status
-          }
-        }
-      }
-    `);
-
-    const subscriptionData = await subscriptionResponse.json();
-    const subs =
-      subscriptionData?.data?.currentAppInstallation?.activeSubscriptions || [];
-
-    const activeSub = subs.find(
-      (s: { status: string }) => s.status === "ACTIVE",
-    );
-
-    if (activeSub) {
-      planName = activeSub.name || "Pro";
-      previewLimit = 999999; // effectively unlimited
-    }
-  } catch (err) {
-    console.error("Failed to check subscription:", err);
-    // Default to Free if query fails
-  }
-
-  // ── Sync usage record with correct limit based on plan ──
-  const usage = await prisma.shopUsage.upsert({
-    where: { shopId: shop.id },
-    create: {
-      shopId: shop.id,
-      previewCount: 0,
-      previewLimit,
-      periodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-    },
-    update: {
-      previewLimit,
-    },
+  // Sync usage record with the limit from Shopify Managed Pricing.
+  const { planName, previewLimit } = await getCurrentBillingPlan(admin);
+  const usage = await syncShopUsage({
+    shopId: shop.id,
+    previewLimit,
+    resetExpiredCycle: true,
   });
-
   const recentPreviewsRaw = await prisma.preview.findMany({
     where: {
       shopId: shop.id,
