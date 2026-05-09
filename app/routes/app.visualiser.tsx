@@ -956,7 +956,8 @@ export default function VisualiserPage() {
 
       const formData = new FormData();
       formData.append("productId", product.id);
-      formData.append("baseImageUrl", product.featuredImage);
+      formData.append("baseImageUrl", product.featuredImage ?? "");
+      formData.append("productTitle", product.title ?? "");
       formData.append("zoneId", zoneId);
       formData.append("zoneName", "Main Area");
       formData.append("mask", blob, `${zoneId}.png`);

@@ -18,6 +18,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const zoneId = formData.get("zoneId") as string;
     const zoneName = formData.get("zoneName") as string;
     const baseImageUrl = formData.get("baseImageUrl") as string;
+    const productTitle = (formData.get("productTitle") as string | null) || null;
     const maskFile = formData.get("mask") as File | null;
 
     if (!productId || !zoneId || !zoneName || !maskFile) {
@@ -34,8 +35,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const product = await upsertProduct({
       shopId: shop.id,
       shopifyProductId: productId,
-      title: null,
-      handle: null,
+      title: productTitle,
       imageUrl: baseImageUrl ?? null,
     });
 

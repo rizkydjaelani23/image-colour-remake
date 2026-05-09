@@ -17,9 +17,10 @@ export async function upsertProduct(params: {
       },
     },
     update: {
-      title,
-      handle,
-      imageUrl,
+      // Only overwrite fields that are actually provided — never wipe existing data with null
+      ...(title != null && { title }),
+      ...(handle != null && { handle }),
+      ...(imageUrl != null && { imageUrl }),
     },
     create: {
       shopId,
