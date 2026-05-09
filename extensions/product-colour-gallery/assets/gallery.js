@@ -11,7 +11,7 @@
     const openByDefault = root.dataset.openByDefault === "true";
 
     if (!numericProductId || !shop) {
-      root.innerHTML = '<div class="pcg-error">Missing product data.</div>';
+      root.innerHTML = "";
       return;
     }
 
@@ -269,7 +269,7 @@
       render();
     } catch (error) {
       console.error("Product colour gallery error:", error);
-      root.innerHTML = `<div class="pcg-error">Could not load colour previews: ${error.message}</div>`;
+      root.innerHTML = "";
     }
   }
 
