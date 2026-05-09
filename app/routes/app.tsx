@@ -24,6 +24,7 @@ export default function App() {
         <s-link href="/app/visualiser">Visualiser</s-link>
         <s-link href="/app/previews">Preview Manager</s-link>
         <s-link href="/app/swatches">Swatch Library</s-link>
+        <s-link href="/app/storefront-preview-test">Storefront Preview</s-link>
         <s-link href="/app/instructions">Instructions</s-link>
         <s-link href="/app/plans">Plans</s-link>
       </s-app-nav>
