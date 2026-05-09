@@ -468,11 +468,17 @@ export default function VisualiserPage() {
 
     if (outlinePoints.length === 0) return;
 
-    ctx.strokeStyle =
-      tool === "smart-outline"
-        ? "rgba(255, 140, 0, 1)"
-        : "rgba(0, 200, 255, 1)";
-    ctx.lineWidth = 2;
+    // Scale line and dot sizes so they stay visually consistent at any zoom level
+    // and are controllable via the brush size slider (smaller brush = finer outline).
+    // At default brushSize=24, zoom=1 → lineW≈2, dotR≈4 (same as old hardcoded values).
+    const lineW = Math.max(0.5, brushSize * 0.083) / zoom;
+    const dotR  = Math.max(1.5, brushSize * 0.167) / zoom;
+
+    const outlineColour =
+      tool === "smart-outline" ? "rgba(255, 140, 0, 1)" : "rgba(0, 200, 255, 1)";
+
+    ctx.strokeStyle = outlineColour;
+    ctx.lineWidth = lineW;
     ctx.beginPath();
     ctx.moveTo(outlinePoints[0].x, outlinePoints[0].y);
 
@@ -484,11 +490,8 @@ export default function VisualiserPage() {
 
     for (const point of outlinePoints) {
       ctx.beginPath();
-      ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
-      ctx.fillStyle =
-        tool === "smart-outline"
-          ? "rgba(255, 140, 0, 1)"
-          : "rgba(0, 200, 255, 1)";
+      ctx.arc(point.x, point.y, dotR, 0, Math.PI * 2);
+      ctx.fillStyle = outlineColour;
       ctx.fill();
     }
   }

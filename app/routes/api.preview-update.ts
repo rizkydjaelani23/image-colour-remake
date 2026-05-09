@@ -15,6 +15,7 @@ export async function action({ request }: ActionFunctionArgs) {
       status,
       colourName,
       fabricFamily,
+      customerDisplayName,
     } = await request.json();
 
     if (!previewId || typeof previewId !== "string") {
@@ -54,6 +55,11 @@ export async function action({ request }: ActionFunctionArgs) {
 
     if (typeof fabricFamily === "string" && fabricFamily.trim()) {
       updateData.fabricFamily = fabricFamily.trim();
+    }
+
+    if (typeof customerDisplayName === "string") {
+      // Empty string clears the override (null = fall back to colourName)
+      updateData.customerDisplayName = customerDisplayName.trim() || null;
     }
 
     const updated = await prisma.preview.update({

@@ -83,7 +83,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
         handle: product.handle,
         imageUrl: product.imageUrl,
       },
-      previews,
+      // Use customerDisplayName as the colourName if set — gallery.js reads colourName
+      previews: previews.map((p) => ({
+        ...p,
+        colourName: p.customerDisplayName || p.colourName,
+      })),
     });
   } catch (error) {
     console.error("api.storefront-previews loader error:", error);

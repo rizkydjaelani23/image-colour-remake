@@ -102,6 +102,7 @@ model Preview {
   thumbUrl              String?
   width                 Int?
   height                Int?
+  customerDisplayName   String?
   status                PreviewStatus @default(DRAFT)
   approvedForStorefront Boolean       @default(false)
   featured              Boolean       @default(false)

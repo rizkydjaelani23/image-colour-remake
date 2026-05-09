@@ -46,7 +46,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       });
     }
 
-    const previews = await prisma.preview.findMany({
+    const rawPreviews = await prisma.preview.findMany({
       where: {
         shopId: shop.id,
         productId: product.id,
@@ -56,7 +56,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
         { colourName: "asc" },
         { createdAt: "desc" },
       ],
+      include: {
+        swatch: { select: { imageUrl: true } },
+      },
     });
+
+    const previews = rawPreviews.map((p) => ({
+      id: p.id,
+      shopifyProductId: p.shopifyProductId,
+      fabricFamily: p.fabricFamily,
+      colourName: p.colourName,
+      customerDisplayName: p.customerDisplayName ?? null,
+      imageUrl: p.imageUrl,
+      approvedForStorefront: p.approvedForStorefront,
+      featured: p.featured,
+      status: p.status,
+      zoneId: p.zoneId,
+      swatchImageUrl: p.swatch?.imageUrl ?? null,
+    }));
 
     return Response.json({
       success: true,
