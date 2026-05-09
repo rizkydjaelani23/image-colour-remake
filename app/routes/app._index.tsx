@@ -587,6 +587,50 @@ export default function Index() {
               ))}
             </div>
           )}
+
+          {recentPreviews.length > 0 && recentPreviews.every((p) => !p.approvedForStorefront) && (
+            <div
+              style={{
+                marginTop: "18px",
+                padding: "16px 18px",
+                borderRadius: "14px",
+                background: "#fffbeb",
+                border: "1px solid #fde68a",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "16px",
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 700, color: "#92400e", marginBottom: "4px" }}>
+                  None of your previews are approved for the storefront yet
+                </div>
+                <div style={{ fontSize: "13px", color: "#b45309", lineHeight: 1.5 }}>
+                  Customers won't see any colour options until at least one preview is approved.
+                  Go to the Preview Manager to approve them.
+                </div>
+              </div>
+              <Link
+                to="/app/previews"
+                style={{
+                  padding: "10px 16px",
+                  borderRadius: "10px",
+                  border: "1px solid #d97706",
+                  background: "#d97706",
+                  color: "#ffffff",
+                  fontWeight: 700,
+                  fontSize: "13px",
+                  textDecoration: "none",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                }}
+              >
+                Approve previews →
+              </Link>
+            </div>
+          )}
         </div>
 
         <div style={cardStyle}>

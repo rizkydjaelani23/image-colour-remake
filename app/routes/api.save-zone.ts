@@ -1,12 +1,11 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import fs from "node:fs/promises";
-import path from "node:path";
 
 import prisma from "../utils/db.server";
 import { getOrCreateShop } from "../utils/shop.server";
 import { upsertProduct } from "../utils/products.server";
 import { safeFolderName } from "../utils/visualiser.server";
+import { uploadBufferToStorage } from "../utils/storage.server";
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
@@ -40,27 +39,20 @@ export async function action({ request }: ActionFunctionArgs) {
       imageUrl: baseImageUrl ?? null,
     });
 
-    // 3. Save mask locally (keep your current system)
+    // 3. Save mask to Supabase storage
     const buffer = Buffer.from(await maskFile.arrayBuffer());
 
     const safeProductId = safeFolderName(productId);
+    const maskStoragePath = `${shopDomain}/masks/${safeProductId}/${zoneId}.png`;
 
-    const folderPath = path.join(
-      process.cwd(),
-      "public",
-      "uploads",
-      "masks",
-      safeProductId,
-    );
+    const uploaded = await uploadBufferToStorage({
+      path: maskStoragePath,
+      buffer,
+      contentType: "image/png",
+      upsert: true,
+    });
 
-    await fs.mkdir(folderPath, { recursive: true });
-
-    const fileName = `${zoneId}.png`;
-    const filePath = path.join(folderPath, fileName);
-
-    await fs.writeFile(filePath, buffer);
-
-    const publicMaskPath = `/uploads/masks/${safeProductId}/${fileName}`;
+    const publicMaskPath = uploaded.publicUrl;
 
     // 4. Save zone in Prisma
     const zone = await prisma.zone.upsert({

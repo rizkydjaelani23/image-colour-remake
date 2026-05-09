@@ -3,9 +3,19 @@ import type { CSSProperties } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
+import prisma from "../utils/db.server";
+import { getOrCreateShop } from "../utils/shop.server";
+
+type ProductSummary = {
+  id: string;
+  shopifyProductId: string;
+  title: string | null;
+  imageUrl: string | null;
+  previewCount: number;
+};
 
 type LoaderData = {
-  apiKey: string;
+  productsWithPreviews: ProductSummary[];
 };
 
 type PreviewItem = {
@@ -29,10 +39,32 @@ type LoadedProduct = {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  const shop = await getOrCreateShop(session.shop);
+
+  const products = await prisma.product.findMany({
+    where: {
+      shopId: shop.id,
+      previews: { some: {} },
+    },
+    orderBy: { title: "asc" },
+    select: {
+      id: true,
+      shopifyProductId: true,
+      title: true,
+      imageUrl: true,
+      _count: { select: { previews: true } },
+    },
+  });
 
   return {
-    apiKey: process.env.SHOPIFY_API_KEY || "",
+    productsWithPreviews: products.map((p) => ({
+      id: p.id,
+      shopifyProductId: p.shopifyProductId,
+      title: p.title,
+      imageUrl: p.imageUrl,
+      previewCount: p._count.previews,
+    })),
   };
 }
 
@@ -126,7 +158,7 @@ function getStatusPillStyle(active: boolean, activeType: "green" | "blue" = "gre
 }
 
 export default function PreviewManagerPage() {
-  useLoaderData<typeof loader>();
+  const { productsWithPreviews } = useLoaderData<typeof loader>();
 
   const [productId, setProductId] = useState("");
   const [loading, setLoading] = useState(false);
@@ -495,210 +527,187 @@ export default function PreviewManagerPage() {
       </div>
 
       <div style={{ ...cardStyle, marginBottom: "20px" }}>
-        <div
-          style={{
-            display: "flex",
-            gap: "12px",
-            alignItems: "center",
-            flexWrap: "wrap",
-            marginBottom: "10px",
-          }}
-        >
-          <button
-            type="button"
-            onClick={async () => {
-              try {
-                const selection = await (window as any).shopify.resourcePicker({
-                  type: "product",
-                  multiple: false,
-                });
-
-                const product = selection?.[0];
-                if (!product) return;
-
-                const pickedId = String(product.id || "").trim();
-
-                if (!pickedId) {
-                  setError("Missing product id");
-                  return;
-                }
-
-                setError(null);
-                setProductId(pickedId);
-                await loadPreviews(pickedId);
-              } catch (err) {
-                console.error("Picker error:", err);
-                setError("Could not open the product picker");
-              }
-            }}
-            style={primaryButtonStyle}
-          >
-            Select product
-          </button>
+        <div style={{ fontSize: "12px", fontWeight: 700, color: "#64748b", marginBottom: "12px" }}>
+          SELECT PRODUCT
         </div>
 
-        <div
-          style={{
-            marginTop: "16px",
-            paddingTop: "16px",
-            borderTop: "1px solid #e5e7eb",
-          }}
-        >
+        {productsWithPreviews.length === 0 ? (
+          <p style={{ margin: 0, color: "#64748b", fontSize: "14px" }}>
+            No previews generated yet. Go to the Visualiser to create your first preview.
+          </p>
+        ) : (
           <div
             style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1fr) auto",
-              gap: "16px",
-              alignItems: "start",
+              display: "flex",
+              gap: "10px",
+              flexWrap: "wrap",
             }}
           >
-            <div>
-              <div
-                style={{
-                  fontSize: "12px",
-                  fontWeight: 700,
-                  color: "#64748b",
-                  marginBottom: "8px",
-                }}
-              >
-                CATEGORY / FAMILY OPTIONS
-              </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  gap: "10px",
-                  flexWrap: "wrap",
-                  alignItems: "center",
-                }}
-              >
-                <input
-                  type="text"
-                  value={newCategory}
-                  onChange={(e) => setNewCategory(e.target.value)}
-                  placeholder="Add category like Plush, Suede or Velvet"
-                  style={{
-                    ...inputStyle,
-                    maxWidth: "320px",
-                  }}
-                />
-
+            {productsWithPreviews.map((product) => {
+              const isSelected = productId === product.shopifyProductId;
+              return (
                 <button
+                  key={product.id}
                   type="button"
-                  onClick={() => {
-                    const trimmed = newCategory.trim();
-                    if (!trimmed) return;
-
-                    setManualCategories((prev) =>
-                      prev.includes(trimmed) ? prev : [...prev, trimmed]
-                    );
-                    setNewCategory("");
-                    setCategoryWarning(null);
+                  onClick={async () => {
+                    setProductId(product.shopifyProductId);
+                    await loadPreviews(product.shopifyProductId);
                   }}
-                  style={secondaryButtonStyle}
-                >
-                  Add category
-                </button>
-              </div>
-
-              {categoryWarning && (
-                <div
-                  style={{
-                    marginTop: "12px",
-                    maxWidth: "700px",
-                    padding: "10px 12px",
-                    borderRadius: "10px",
-                    background: "#fff7ed",
-                    border: "1px solid #fed7aa",
-                    color: "#9a3412",
-                    fontSize: "13px",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  {categoryWarning}
-                </div>
-              )}
-
-              {categoryOptions.length > 0 && (
-                <div
                   style={{
                     display: "flex",
-                    gap: "8px",
-                    flexWrap: "wrap",
-                    marginTop: "12px",
+                    alignItems: "center",
+                    gap: "10px",
+                    padding: "8px 12px",
+                    borderRadius: "12px",
+                    border: isSelected ? "2px solid #111827" : "1px solid #e5e7eb",
+                    background: isSelected ? "#111827" : "#ffffff",
+                    color: isSelected ? "#ffffff" : "#111827",
+                    cursor: "pointer",
+                    font: "inherit",
+                    fontWeight: isSelected ? 700 : 500,
+                    textAlign: "left",
                   }}
                 >
-                  {categoryOptions.map((option) => {
-                    const categoryIsUsed =
-                      previews.some(
-                        (preview) => (preview.fabricFamily || "").trim() === option.trim()
-                      ) ||
-                      Object.values(draftFamilies).some(
-                        (value) => (value || "").trim() === option.trim()
+                  {product.imageUrl && (
+                    <img
+                      src={product.imageUrl}
+                      alt=""
+                      style={{
+                        width: "36px",
+                        height: "36px",
+                        borderRadius: "6px",
+                        objectFit: "cover",
+                        border: isSelected ? "1px solid rgba(255,255,255,0.2)" : "1px solid #e5e7eb",
+                        flexShrink: 0,
+                      }}
+                    />
+                  )}
+                  <div>
+                    <div style={{ fontSize: "13px", lineHeight: 1.3 }}>
+                      {product.title || "Untitled product"}
+                    </div>
+                    <div style={{ fontSize: "11px", opacity: isSelected ? 0.7 : 0.5, marginTop: "2px" }}>
+                      {product.previewCount} preview{product.previewCount !== 1 ? "s" : ""}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {productId && !loading && previews.length > 0 && (
+          <div style={{ marginTop: "16px", paddingTop: "16px", borderTop: "1px solid #e5e7eb" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr) auto",
+                gap: "16px",
+                alignItems: "start",
+              }}
+            >
+              <div>
+                <div style={{ fontSize: "12px", fontWeight: 700, color: "#64748b", marginBottom: "8px" }}>
+                  CATEGORY / FAMILY OPTIONS
+                </div>
+
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                  <input
+                    type="text"
+                    value={newCategory}
+                    onChange={(e) => setNewCategory(e.target.value)}
+                    placeholder="Add category like Plush, Suede or Velvet"
+                    style={{ ...inputStyle, maxWidth: "320px" }}
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const trimmed = newCategory.trim();
+                      if (!trimmed) return;
+                      setManualCategories((prev) =>
+                        prev.includes(trimmed) ? prev : [...prev, trimmed]
                       );
+                      setNewCategory("");
+                      setCategoryWarning(null);
+                    }}
+                    style={secondaryButtonStyle}
+                  >
+                    Add category
+                  </button>
+                </div>
 
-                    return (
-                      <div
-                        key={option}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "8px",
-                          padding: "6px 10px",
-                          borderRadius: "999px",
-                          fontSize: "12px",
-                          fontWeight: 700,
-                          background: "#f8fafc",
-                          border: "1px solid #e5e7eb",
-                          color: "#475569",
-                        }}
-                      >
-                        <span>{option}</span>
+                {categoryWarning && (
+                  <div
+                    style={{
+                      marginTop: "12px",
+                      maxWidth: "700px",
+                      padding: "10px 12px",
+                      borderRadius: "10px",
+                      background: "#fff7ed",
+                      border: "1px solid #fed7aa",
+                      color: "#9a3412",
+                      fontSize: "13px",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {categoryWarning}
+                  </div>
+                )}
 
-                        <button
-                          type="button"
-                          onClick={() => removeCategory(option)}
-                          title={
-                            categoryIsUsed
-                              ? "This category is still assigned to previews"
-                              : "Remove category"
-                          }
+                {categoryOptions.length > 0 && (
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "12px" }}>
+                    {categoryOptions.map((option) => {
+                      const categoryIsUsed =
+                        previews.some((p) => (p.fabricFamily || "").trim() === option.trim()) ||
+                        Object.values(draftFamilies).some((v) => (v || "").trim() === option.trim());
+
+                      return (
+                        <div
+                          key={option}
                           style={{
-                            border: "none",
-                            background: "transparent",
-                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            padding: "6px 10px",
+                            borderRadius: "999px",
                             fontSize: "12px",
                             fontWeight: 700,
-                            color: categoryIsUsed ? "#94a3b8" : "#dc2626",
-                            padding: 0,
-                            lineHeight: 1,
+                            background: "#f8fafc",
+                            border: "1px solid #e5e7eb",
+                            color: "#475569",
                           }}
                         >
-                          ×
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+                          <span>{option}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeCategory(option)}
+                            title={categoryIsUsed ? "This category is still assigned to previews" : "Remove category"}
+                            style={{
+                              border: "none",
+                              background: "transparent",
+                              cursor: "pointer",
+                              fontSize: "12px",
+                              fontWeight: 700,
+                              color: categoryIsUsed ? "#94a3b8" : "#dc2626",
+                              padding: 0,
+                              lineHeight: 1,
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
 
-            <div>
-              <button
-                type="button"
-                onClick={() => loadPreviews()}
-                style={secondaryButtonStyle}
-              >
+              <button type="button" onClick={() => loadPreviews()} style={secondaryButtonStyle}>
                 Reload previews
               </button>
             </div>
           </div>
-        </div>
-
-        {productId && !loading && (
-          <p style={{ marginTop: "12px", marginBottom: 0, fontSize: "13px", color: "#64748b" }}>
-            Product selected. Previews should load automatically after selection.
-          </p>
         )}
       </div>
       {loading && (

@@ -4,6 +4,7 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import en from "@shopify/polaris/locales/en.json";
 import { login } from "../../shopify.server";
 
+
 export async function loader({ request }: LoaderFunctionArgs) {
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "",

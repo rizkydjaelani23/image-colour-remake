@@ -138,13 +138,21 @@ export default function VisualiserPage() {
       setSwatchSource(null);
       setZoom(1);
       setPan({ x: 0, y: 0 });
+      setBulkPreviewResults([]);
+      setBulkPreviewError(null);
+      setBulkSwatchFiles([]);
+      setSelectedRecentSwatchIds([]);
+      setGenerationNotice(null);
+      setCurrentBatch(0);
+      setTotalBatches(0);
+      setGeneratedCount(0);
     } catch (err) {
       console.error("Product picker error:", err);
       setError("Could not open the product picker.");
     }
   }
 
-  async function loadZones(productId: string) {
+  async function loadZones(productId: string): Promise<Zone[]> {
     try {
       const response = await fetch(
         `/api/list-zones?productId=${encodeURIComponent(productId)}`,
@@ -163,15 +171,18 @@ export default function VisualiserPage() {
         throw new Error(data.error || "Failed to load zones");
       }
 
-      setZones(data.zones || []);
+      const zones = data.zones || [];
+      setZones(zones);
 
-      if (data.zones && data.zones.length > 0) {
-        setActiveZoneId(data.zones[0].id);
+      if (zones.length > 0) {
+        setActiveZoneId(zones[0].id);
         setMaskLocked(true);
       } else {
         setActiveZoneId(null);
         setMaskLocked(false);
       }
+
+      return zones;
     } catch (err) {
       console.error("Load zones error:", err);
 
@@ -180,7 +191,23 @@ export default function VisualiserPage() {
       } else {
         setMaskError("Failed to load zones.");
       }
+
+      return [];
     }
+  }
+
+  function loadZoneMaskOntoCanvas(zone: Zone) {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.src = zone.maskPath;
+    img.onload = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    };
   }
 
   useEffect(() => {
@@ -797,6 +824,7 @@ export default function VisualiserPage() {
   );
 
   const results: Array<{ fileName: string; previewUrl: string }> = [];
+  const skipped: string[] = [];
 
   try {
     for (let i = 0; i < jobs.length; i += batchSize) {
@@ -818,72 +846,77 @@ export default function VisualiserPage() {
           formData.append("swatchUrl", job.url);
         }
 
-        const response = await fetch("/api/generate-preview", {
-          method: "POST",
-          body: formData,
-        });
-
-        const rawText = await response.text();
-
-        let data: unknown;
         try {
-          data = JSON.parse(rawText);
-        } catch {
-          throw new Error(rawText || `Failed on ${job.colourName}`);
-        }
-
-        if (!response.ok) {
-          const errorMessage =
-            typeof data === "object" &&
-            data !== null &&
-            "error" in data &&
-            typeof (data as { error: unknown }).error === "string"
-              ? (data as { error: string }).error
-              : `Failed on ${job.colourName}`;
-
-          throw new Error(errorMessage);
-        }
-
-        if (
-          typeof data === "object" &&
-          data !== null &&
-          "preview" in data &&
-          typeof (data as { preview: { url?: string } }).preview?.url === "string"
-        ) {
-          results.push({
-            fileName: job.colourName,
-            previewUrl: (data as { preview: { url: string } }).preview.url,
+          const response = await fetch("/api/generate-preview", {
+            method: "POST",
+            body: formData,
           });
 
-          setBulkPreviewResults([...results]);
-        } else {
-          throw new Error(`Preview URL missing for ${job.colourName}`);
+          const rawText = await response.text();
+
+          let data: unknown;
+          try {
+            data = JSON.parse(rawText);
+          } catch {
+            skipped.push(job.colourName);
+            continue;
+          }
+
+          if (!response.ok) {
+            const errorMessage =
+              typeof data === "object" &&
+              data !== null &&
+              "error" in data &&
+              typeof (data as { error: unknown }).error === "string"
+                ? (data as { error: string }).error
+                : `Failed on ${job.colourName}`;
+            skipped.push(`${job.colourName} (${errorMessage})`);
+            continue;
+          }
+
+          if (
+            typeof data === "object" &&
+            data !== null &&
+            "preview" in data &&
+            typeof (data as { preview: { url?: string } }).preview?.url === "string"
+          ) {
+            results.push({
+              fileName: job.colourName,
+              previewUrl: (data as { preview: { url: string } }).preview.url,
+            });
+            setBulkPreviewResults([...results]);
+          } else {
+            skipped.push(job.colourName);
+          }
+        } catch {
+          skipped.push(job.colourName);
         }
       }
 
       setGeneratedCount(results.length);
     }
 
-    // Refresh recent swatches and clear selection after successful bulk run
+    // Refresh recent swatches and clear selection after bulk run
     loadRecentSwatches();
     setSelectedRecentSwatchIds([]);
 
+    if (skipped.length > 0) {
+      setBulkPreviewError(
+        `${skipped.length} preview${skipped.length === 1 ? "" : "s"} could not be generated: ${skipped.join(", ")}`
+      );
+    }
+
     setGenerationNotice(
-      "Preview generation finished. You can review all completed images in the Preview Manager."
+      results.length > 0
+        ? "Preview generation finished. Review completed images in the Preview Manager."
+        : null
     );
     setCurrentBatch(0);
     setTotalBatches(0);
   } catch (err) {
     console.error("Bulk preview error:", err);
-
-    if (err instanceof Error) {
-      setBulkPreviewError(err.message);
-    } else {
-      setBulkPreviewError("Failed to generate bulk previews.");
-    }
-
-    setGenerationNotice(
-      "Some previews could not be generated. Completed images can still be viewed in the Preview Manager."
+    setBulkPreviewError(
+      err instanceof Error ? err.message : "Failed to generate bulk previews."
     );
   } finally {
     setBulkPreviewLoading(false);
@@ -1616,20 +1649,7 @@ const stepTextStyle: CSSProperties = {
                               setZoom(1);
                               setPan({ x: 0, y: 0 });
 
-                              const img = new Image();
-                              img.crossOrigin = "anonymous";
-                              img.src = zone.maskPath;
-
-                              img.onload = () => {
-                                const canvas = canvasRef.current;
-                                if (!canvas) return;
-
-                                const ctx = canvas.getContext("2d");
-                                if (!ctx) return;
-
-                                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                              };
+                              loadZoneMaskOntoCanvas(zone);
                             }}
                             style={{
                               flex: 1,
@@ -1703,11 +1723,12 @@ const stepTextStyle: CSSProperties = {
                                 return;
                               }
 
-                              if (activeZoneId === zone.id) {
-                                clearMask();
-                              }
+                              clearMask();
 
-                              await loadZones(product.id);
+                              const remaining = await loadZones(product.id);
+                              if (remaining.length > 0) {
+                                loadZoneMaskOntoCanvas(remaining[0]);
+                              }
                             }}
                             style={{
                               padding: "10px 12px",
@@ -2198,7 +2219,8 @@ const stepTextStyle: CSSProperties = {
                       <button
                         type="button"
                         onClick={generatePreview}
-                        disabled={previewLoading}
+                        disabled={previewLoading || (!swatchFile && !swatchUrl)}
+                        title={(!swatchFile && !swatchUrl) ? "Pick or upload a swatch first" : undefined}
                         style={{
                           width: "100%",
                           padding: "12px 14px",
@@ -2206,14 +2228,14 @@ const stepTextStyle: CSSProperties = {
                           border: "1px solid #111827",
                           background: "#111827",
                           color: "#ffffff",
-                          cursor: previewLoading ? "not-allowed" : "pointer",
-                          opacity: previewLoading ? 0.7 : 1,
+                          cursor: (previewLoading || (!swatchFile && !swatchUrl)) ? "not-allowed" : "pointer",
+                          opacity: (previewLoading || (!swatchFile && !swatchUrl)) ? 0.45 : 1,
                           minHeight: "44px",
                           fontWeight: 700,
                           fontSize: "14px",
                         }}
                       >
-                        {previewLoading ? "Generating..." : "Create single preview"}
+                        {previewLoading ? "Generating..." : (!swatchFile && !swatchUrl) ? "Pick a swatch first" : "Create single preview"}
                       </button>
 
                       {previewError && (

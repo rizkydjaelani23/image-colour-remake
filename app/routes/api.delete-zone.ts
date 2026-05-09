@@ -1,10 +1,10 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import fs from "node:fs/promises";
-import path from "node:path";
 
 import prisma from "../utils/db.server";
 import { getOrCreateShop } from "../utils/shop.server";
+import { deleteFileFromStorage } from "../utils/storage.server";
+import { safeFolderName } from "../utils/visualiser.server";
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
@@ -56,18 +56,14 @@ export async function action({ request }: ActionFunctionArgs) {
       },
     });
 
-    // Try to delete local mask file if it exists
-    if (zone.maskPath) {
-      const fullMaskPath = path.join(
-        process.cwd(),
-        "public",
-        zone.maskPath.replace(/^\/+/, ""),
-      );
-
+    // Delete mask from Supabase (new) or ignore legacy local paths
+    if (zone.maskPath && zone.maskPath.startsWith("http")) {
       try {
-        await fs.unlink(fullMaskPath);
+        const safeProductId = safeFolderName(productId);
+        const maskStoragePath = `${shopDomain}/masks/${safeProductId}/${zone.key}.png`;
+        await deleteFileFromStorage(maskStoragePath);
       } catch {
-        // ignore file delete errors
+        // ignore cleanup errors — zone DB record still gets deleted
       }
     }
 

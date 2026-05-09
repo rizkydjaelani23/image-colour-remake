@@ -1,7 +1,5 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import fs from "node:fs/promises";
-import path from "node:path";
 import sharp from "sharp";
 
 import prisma from "../utils/db.server";
@@ -13,34 +11,6 @@ import { syncShopUsage } from "../utils/usage.server";
 import { safeFolderName } from "../utils/visualiser.server";
 
 async function tileSwatchToSize(
-  swatchBuffer: Buffer,
-  width: number,
-  height: number,
-  tileScale = 0.22,
-): Promise<Buffer> {
-  const targetTileWidth = Math.max(70, Math.round(width * tileScale));
-
-  const scaledSwatch = await sharp(swatchBuffer)
-    .resize({
-      width: targetTileWidth,
-      withoutEnlargement: false,
-      fit: "cover",
-    })
-    .blur(0.45)
-    .modulate({
-      brightness: 1.04,
-      saturation: 1.12,
-    })
-    .png()
-    .toBuffer();
-
-  const meta = await sharp(scaledSwatch).metadata();
-  const sw = meta.width || 128;
-  const sh = meta.height || 128;
-
-  const tiles: { input: Buffer; left: number; top: number }[] = [];
-
-  async function tileSwatchToSize(
   swatchBuffer: Buffer,
   width: number,
   height: number,
@@ -60,25 +30,11 @@ async function tileSwatchToSize(
     .png()
     .toBuffer();
 
-  // Stretch instead of tile (KEY FIX)
   return sharp(base)
     .resize(width, height, {
       fit: "fill",
     })
     .blur(1.2)
-    .png()
-    .toBuffer();
-}
-
-  return sharp({
-    create: {
-      width,
-      height,
-      channels: 4,
-      background: { r: 255, g: 255, b: 255, alpha: 1 },
-    },
-  })
-    .composite(tiles)
     .png()
     .toBuffer();
 }
@@ -175,51 +131,6 @@ async function extractMaskedLighting(
     .toBuffer();
 }
 
-async function createDetailMap(
-  baseBuffer: Buffer,
-  maskBuffer: Buffer,
-  width: number,
-  height: number,
-): Promise<Buffer> {
-  const blurred = await sharp(baseBuffer)
-    .resize(width, height)
-    .greyscale()
-    .blur(3)
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const base = await sharp(baseBuffer)
-    .resize(width, height)
-    .greyscale()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const mask = await sharp(maskBuffer)
-    .resize(width, height)
-    .greyscale()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const out = Buffer.alloc(width * height);
-
-  for (let i = 0; i < width * height; i++) {
-    const diff = base.data[i] - blurred.data[i];
-    const boosted = 128 + diff * 1.8;
-    const masked = Math.round(boosted * (mask.data[i] / 255));
-    out[i] = Math.max(0, Math.min(255, masked));
-  }
-
-  return sharp(out, {
-    raw: {
-      width,
-      height,
-      channels: 1,
-    },
-  })
-    .png()
-    .toBuffer();
-}
-
 async function buildRealisticComposite(params: {
   baseBuffer: Buffer;
   swatchBuffer: Buffer;
@@ -245,13 +156,6 @@ async function buildRealisticComposite(params: {
 
     const renderMode = getFabricRenderMode(fabricFamily, colourName);
 
-    const tiledSwatch = await tileSwatchToSize(
-      swatchBuffer,
-      width,
-      height,
-      tileScale,
-    );
-
   // Base image detail + lighting
   const maskedLighting = await extractMaskedLighting(
     baseBuffer,
@@ -259,21 +163,6 @@ async function buildRealisticComposite(params: {
     width,
     height,
   );
-
-  const detailMap = await createDetailMap(
-    baseBuffer,
-    maskBuffer,
-    width,
-    height,
-  );
-
-  const strongDetailMap = await sharp(baseBuffer)
-    .resize(width, height)
-    .greyscale()
-    .normalise()
-    .sharpen(1.4, 1.6, 2.2)
-    .png()
-    .toBuffer();
 
   // ===== MAIN FABRIC COLOUR LAYER =====
   // This is the important change:
@@ -404,9 +293,9 @@ async function buildRealisticComposite(params: {
         ? (isDarkFabric ? 1.02 : 1.0)
         : (isDarkFabric ? 0.96 : 0.99);
 
-    out[idx] = Math.round(nr * (1 - alpha) + fr * alpha);
-    out[idx + 1] = Math.round(ng * (1 - alpha) + fg * alpha);
-    out[idx + 2] = Math.round(nb * (1 - alpha) + fb * alpha);
+    out[idx] = Math.max(0, Math.min(255, Math.round(nr * (1 - alpha) + fr * boost * alpha)));
+    out[idx + 1] = Math.max(0, Math.min(255, Math.round(ng * (1 - alpha) + fg * boost * alpha)));
+    out[idx + 2] = Math.max(0, Math.min(255, Math.round(nb * (1 - alpha) + fb * boost * alpha)));
     out[idx + 3] = 255;
   }
 
@@ -415,35 +304,6 @@ async function buildRealisticComposite(params: {
       width,
       height,
       channels: 4,
-    },
-  })
-    .png()
-    .toBuffer();
-}
-
-async function createAverageColourLayer(
-  swatchBuffer: Buffer,
-  width: number,
-  height: number,
-): Promise<Buffer> {
-  const avg = await sharp(swatchBuffer)
-    .resize(1, 1)
-    .removeAlpha()
-    .raw()
-    .toBuffer();
-
-  const [r, g, b] = avg;
-
-  return sharp({
-    create: {
-      width,
-      height,
-      channels: 3,
-      background: {
-        r: r ?? 128,
-        g: g ?? 128,
-        b: b ?? 128,
-      },
     },
   })
     .png()
@@ -484,25 +344,6 @@ function getFabricRenderMode(fabricFamily: string, colourName: string) {
   }
 
   return "soft-texture";
-}
-
-function isLightFabricColour(swatchBuffer: Buffer) {
-  return sharp(swatchBuffer)
-    .resize(1, 1)
-    .removeAlpha()
-    .raw()
-    .toBuffer()
-    .then((avg) => {
-      const [r, g, b] = avg;
-      const luminance =
-        0.299 * (r ?? 0) + 0.587 * (g ?? 0) + 0.114 * (b ?? 0);
-
-      const channelSpread =
-        Math.max(r ?? 0, g ?? 0, b ?? 0) - Math.min(r ?? 0, g ?? 0, b ?? 0);
-
-      // Light neutral and warm-neutral fabrics should both count
-      return luminance >= 170 && channelSpread <= 80;
-    });
 }
 
 async function createSoftTextureLayer(
@@ -734,9 +575,20 @@ if (usage.previewCount >= usage.previewLimit) {
       return Response.json({ error: "Missing swatch" }, { status: 400 });
     }
 
-    const rawMaskBuffer = await fs.readFile(
-    path.join(process.cwd(), "public", zone.maskPath.replace(/^\/+/, "")),
-    );
+    let rawMaskBuffer: Buffer;
+    if (zone.maskPath.startsWith("http")) {
+      const maskResponse = await fetch(zone.maskPath);
+      if (!maskResponse.ok) {
+        return Response.json({ error: "Could not download mask image" }, { status: 500 });
+      }
+      rawMaskBuffer = Buffer.from(await maskResponse.arrayBuffer());
+    } else {
+      const { default: fs } = await import("node:fs/promises");
+      const { default: path } = await import("node:path");
+      rawMaskBuffer = await fs.readFile(
+        path.join(process.cwd(), "public", zone.maskPath.replace(/^\/+/, "")),
+      );
+    }
 
     const baseMeta = await sharp(baseBuffer).metadata();
     const width = baseMeta.width || 1200;
@@ -862,15 +714,16 @@ if (usage.previewCount >= usage.previewLimit) {
       },
     });
 
-    // ✅ ADD THIS BLOCK HERE
-    await prisma.shopUsage.update({
-      where: { shopId: shop.id },
-      data: {
-        previewCount: {
-          increment: 1,
-        },
-      },
+    const limitEnforcement = await prisma.shopUsage.updateMany({
+      where: { shopId: shop.id, previewCount: { lt: usage.previewLimit } },
+      data: { previewCount: { increment: 1 } },
     });
+    if (limitEnforcement.count === 0) {
+      return Response.json(
+        { error: "Preview limit reached for this billing cycle." },
+        { status: 403 },
+      );
+    }
 
     return Response.json({
       success: true,

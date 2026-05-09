@@ -136,8 +136,14 @@
         captureOriginalMainMedia();
 
         img.src = preview.imageUrl;
-        img.removeAttribute("srcset");
-        img.removeAttribute("sizes");
+        // Keep srcset/sizes so responsive image loading still works on mobile.
+        // We update srcset to point to the same preview URL rather than removing it.
+        if (img.hasAttribute("srcset")) {
+          img.srcset = preview.imageUrl;
+        }
+        if (img.hasAttribute("sizes")) {
+          img.sizes = "100vw";
+        }
 
         if (preview.colourName) {
           img.alt = preview.colourName;
