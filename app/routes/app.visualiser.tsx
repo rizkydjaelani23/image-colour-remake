@@ -104,6 +104,12 @@ export default function VisualiserPage() {
   const [currentBatch, setCurrentBatch] = useState<number>(0);
   const [totalBatches, setTotalBatches] = useState<number>(0);
   const [generatedCount, setGeneratedCount] = useState<number>(0);
+  const [bulkUploadMode, setBulkUploadMode] = useState<"files" | "folder">("files");
+  const [folderSwatchJobs, setFolderSwatchJobs] = useState<Array<{
+    file: File;
+    colourName: string;
+    fabricFamily: string;
+  }>>([]);
 
   const imageRef = useRef<HTMLImageElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -146,6 +152,8 @@ export default function VisualiserPage() {
       setCurrentBatch(0);
       setTotalBatches(0);
       setGeneratedCount(0);
+      setBulkUploadMode("files");
+      setFolderSwatchJobs([]);
     } catch (err) {
       console.error("Product picker error:", err);
       setError("Could not open the product picker.");
@@ -771,9 +779,9 @@ export default function VisualiserPage() {
     return;
   }
 
-  // Build the combined list of jobs: selected recent swatches + uploaded files
+  // Build the combined list of jobs: selected recent swatches + uploaded files + folder files
   type BulkJob =
-    | { kind: "file"; file: File; colourName: string }
+    | { kind: "file"; file: File; colourName: string; fabricFamily: string }
     | { kind: "url"; url: string; colourName: string; fabricFamily: string };
 
   const jobs: BulkJob[] = [];
@@ -791,12 +799,23 @@ export default function VisualiserPage() {
     }
   }
 
-  // Then add uploaded files
+  // Then add individually uploaded files
   for (const file of bulkSwatchFiles) {
     jobs.push({
       kind: "file",
       file,
       colourName: file.name.replace(/\.[^/.]+$/, ""),
+      fabricFamily: "General",
+    });
+  }
+
+  // Then add folder-derived files (with auto-detected fabric family + colour name)
+  for (const job of folderSwatchJobs) {
+    jobs.push({
+      kind: "file",
+      file: job.file,
+      colourName: job.colourName,
+      fabricFamily: job.fabricFamily,
     });
   }
 
@@ -837,7 +856,7 @@ export default function VisualiserPage() {
         const formData = new FormData();
         formData.append("productId", product.id);
         formData.append("zoneId", activeZoneId);
-        formData.append("fabricFamily", job.kind === "url" ? job.fabricFamily : "General");
+        formData.append("fabricFamily", job.fabricFamily);
         formData.append("colourName", job.colourName);
 
         if (job.kind === "file") {
@@ -896,9 +915,10 @@ export default function VisualiserPage() {
       setGeneratedCount(results.length);
     }
 
-    // Refresh recent swatches and clear selection after bulk run
+    // Refresh recent swatches and clear selections after bulk run
     loadRecentSwatches();
     setSelectedRecentSwatchIds([]);
+    setFolderSwatchJobs([]);
 
     if (skipped.length > 0) {
       setBulkPreviewError(
@@ -1025,6 +1045,43 @@ export default function VisualiserPage() {
     } finally {
       setMaskSaving(false);
     }
+  }
+
+  // ── Folder swatch upload helpers ────────────────────────────────────────────
+
+  function deriveFolderColourName(fileName: string, folderName: string): string {
+    const baseName = fileName.replace(/\.[^/.]+$/, "").trim();
+    if (!folderName) return baseName;
+    const normBase = baseName.toLowerCase();
+    const normFolder = folderName.trim().toLowerCase();
+    // If the filename already starts with the folder name, don't prefix again
+    if (normBase.startsWith(normFolder)) return baseName;
+    return `${folderName.trim()} ${baseName}`;
+  }
+
+  function handleFolderInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const rawFiles = Array.from(e.target.files || []).filter((f) =>
+      f.type.startsWith("image/")
+    );
+
+    const jobs = rawFiles.map((file) => {
+      // webkitRelativePath = "FolderName/colour.jpg" or "Parent/FolderName/colour.jpg"
+      const relativePath =
+        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+      const parts = relativePath.split("/");
+      // Use the immediate parent folder of each file as the fabric family
+      const folderName = parts.length >= 2 ? parts[parts.length - 2] : "";
+      const colourName = deriveFolderColourName(file.name, folderName);
+      return {
+        file,
+        colourName,
+        fabricFamily: folderName || "General",
+      };
+    });
+
+    setFolderSwatchJobs(jobs);
+    setBulkPreviewResults([]);
+    setBulkPreviewError(null);
   }
 
 const stepCardStyle: CSSProperties = {
@@ -1266,7 +1323,7 @@ const stepTextStyle: CSSProperties = {
                 <div style={{ fontSize: "13px", color: "#555", lineHeight: 1.8 }}>
                   <div>✅ Product selected</div>
                   <div>{zones.length > 0 ? "✅" : "⏳"} Fabric area saved</div>
-                  <div>{swatchFile || bulkSwatchFiles.length > 0 ? "✅" : "⏳"} Swatch uploaded</div>
+                  <div>{swatchFile || bulkSwatchFiles.length > 0 || folderSwatchJobs.length > 0 ? "✅" : "⏳"} Swatch uploaded</div>
                   <div>{generatedPreviewUrl || bulkPreviewResults.length > 0 ? "✅" : "⏳"} Preview created</div>
                 </div>
               </div>
@@ -2277,39 +2334,214 @@ const stepTextStyle: CSSProperties = {
                         Queue multiple swatches — selected recent colours plus any new files you upload — and the app will generate them in batches of 10.
                       </div>
 
+                      {/* ── Upload mode tabs ── */}
                       <div style={{ marginBottom: "12px" }}>
-                        <label
+                        <div
                           style={{
-                            display: "block",
-                            fontWeight: 600,
-                            marginBottom: "6px",
-                            fontSize: "13px",
+                            display: "flex",
+                            gap: "6px",
+                            marginBottom: "10px",
                           }}
                         >
-                          Upload new swatches (optional)
-                        </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBulkUploadMode("files");
+                              setFolderSwatchJobs([]);
+                            }}
+                            style={{
+                              padding: "6px 12px",
+                              borderRadius: "8px",
+                              border: "1px solid #d1d5db",
+                              background: bulkUploadMode === "files" ? "#111827" : "#fff",
+                              color: bulkUploadMode === "files" ? "#fff" : "#374151",
+                              fontSize: "12px",
+                              fontWeight: 600,
+                              cursor: "pointer",
+                            }}
+                          >
+                            📄 Individual files
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBulkUploadMode("folder");
+                              setBulkSwatchFiles([]);
+                            }}
+                            style={{
+                              padding: "6px 12px",
+                              borderRadius: "8px",
+                              border: "1px solid #d1d5db",
+                              background: bulkUploadMode === "folder" ? "#111827" : "#fff",
+                              color: bulkUploadMode === "folder" ? "#fff" : "#374151",
+                              fontSize: "12px",
+                              fontWeight: 600,
+                              cursor: "pointer",
+                            }}
+                          >
+                            📁 Upload folder
+                          </button>
+                        </div>
 
-                        <input
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          onChange={(e) => {
-                            const files = Array.from(e.target.files || []).slice(0, 10);
-                            setBulkSwatchFiles(files);
-                            setBulkPreviewResults([]);
-                            setBulkPreviewError(null);
-                          }}
-                        />
+                        {bulkUploadMode === "files" ? (
+                          /* ── Individual files mode ── */
+                          <div>
+                            <label
+                              style={{
+                                display: "block",
+                                fontWeight: 600,
+                                marginBottom: "6px",
+                                fontSize: "13px",
+                              }}
+                            >
+                              Upload swatch images
+                            </label>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              multiple
+                              onChange={(e) => {
+                                const files = Array.from(e.target.files || []);
+                                setBulkSwatchFiles(files);
+                                setBulkPreviewResults([]);
+                                setBulkPreviewError(null);
+                              }}
+                            />
+                            <p style={{ marginTop: "8px", fontSize: "13px", color: "#64748b" }}>
+                              {bulkSwatchFiles.length > 0
+                                ? `${bulkSwatchFiles.length} ${bulkSwatchFiles.length === 1 ? "file" : "files"} ready — colour names taken from filenames`
+                                : "No files selected"}
+                            </p>
+                          </div>
+                        ) : (
+                          /* ── Folder mode ── */
+                          <div>
+                            <label
+                              style={{
+                                display: "block",
+                                fontWeight: 600,
+                                marginBottom: "4px",
+                                fontSize: "13px",
+                              }}
+                            >
+                              Select a fabric folder
+                            </label>
+                            <p style={{ fontSize: "12px", color: "#64748b", margin: "0 0 8px" }}>
+                              Folder name becomes the fabric family. File name becomes the colour.
+                              If the file already includes the folder name (e.g. "Plush Maroon") it won't be duplicated.
+                            </p>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              ref={(el) => {
+                                if (el) {
+                                  el.setAttribute("webkitdirectory", "");
+                                  el.setAttribute("directory", "");
+                                }
+                              }}
+                              multiple
+                              onChange={handleFolderInputChange}
+                            />
 
-                        <p style={{ marginTop: "8px", fontSize: "13px", color: "#64748b" }}>
-                          {bulkSwatchFiles.length > 0
-                            ? `${bulkSwatchFiles.length} new ${bulkSwatchFiles.length === 1 ? "file" : "files"} ready`
-                            : "No new files"}
-                        </p>
+                            {folderSwatchJobs.length > 0 && (
+                              <div style={{ marginTop: "10px" }}>
+                                {/* Group jobs by fabric family for a tidy summary */}
+                                {(() => {
+                                  const grouped: Record<string, typeof folderSwatchJobs> = {};
+                                  for (const job of folderSwatchJobs) {
+                                    if (!grouped[job.fabricFamily]) grouped[job.fabricFamily] = [];
+                                    grouped[job.fabricFamily].push(job);
+                                  }
+                                  return Object.entries(grouped).map(([family, jobs]) => (
+                                    <div
+                                      key={family}
+                                      style={{
+                                        marginBottom: "10px",
+                                        padding: "10px 12px",
+                                        borderRadius: "8px",
+                                        background: "#f8fafc",
+                                        border: "1px solid #e2e8f0",
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          fontSize: "12px",
+                                          fontWeight: 700,
+                                          color: "#0f172a",
+                                          marginBottom: "6px",
+                                        }}
+                                      >
+                                        📁 {family} — {jobs.length} {jobs.length === 1 ? "colour" : "colours"}
+                                      </div>
+                                      <div
+                                        style={{
+                                          display: "flex",
+                                          flexWrap: "wrap",
+                                          gap: "4px",
+                                        }}
+                                      >
+                                        {jobs.slice(0, 12).map((job) => (
+                                          <span
+                                            key={job.file.name}
+                                            style={{
+                                              fontSize: "11px",
+                                              padding: "2px 8px",
+                                              borderRadius: "99px",
+                                              background: "#e0f2fe",
+                                              color: "#0369a1",
+                                              fontWeight: 600,
+                                            }}
+                                          >
+                                            {job.colourName}
+                                          </span>
+                                        ))}
+                                        {jobs.length > 12 && (
+                                          <span
+                                            style={{
+                                              fontSize: "11px",
+                                              padding: "2px 8px",
+                                              borderRadius: "99px",
+                                              background: "#f1f5f9",
+                                              color: "#64748b",
+                                              fontWeight: 600,
+                                            }}
+                                          >
+                                            +{jobs.length - 12} more
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ));
+                                })()}
+                                <button
+                                  type="button"
+                                  onClick={() => setFolderSwatchJobs([])}
+                                  style={{
+                                    fontSize: "12px",
+                                    padding: "4px 10px",
+                                    borderRadius: "6px",
+                                    border: "1px solid #d1d5db",
+                                    background: "#fff",
+                                    cursor: "pointer",
+                                    color: "#6b7280",
+                                  }}
+                                >
+                                  Clear folder
+                                </button>
+                              </div>
+                            )}
+
+                            {folderSwatchJobs.length === 0 && (
+                              <p style={{ marginTop: "8px", fontSize: "13px", color: "#64748b" }}>
+                                No folder selected
+                              </p>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Queue summary */}
-                      {(selectedRecentSwatchIds.length > 0 || bulkSwatchFiles.length > 0) && (
+                      {(selectedRecentSwatchIds.length > 0 || bulkSwatchFiles.length > 0 || folderSwatchJobs.length > 0) && (
                         <div
                           style={{
                             marginBottom: "12px",
@@ -2322,9 +2554,14 @@ const stepTextStyle: CSSProperties = {
                             fontWeight: 600,
                           }}
                         >
-                          Queue: {selectedRecentSwatchIds.length + bulkSwatchFiles.length} total
-                          {selectedRecentSwatchIds.length > 0 &&
-                            ` (${selectedRecentSwatchIds.length} recent${bulkSwatchFiles.length > 0 ? `, ${bulkSwatchFiles.length} new` : ""})`}
+                          {(() => {
+                            const total = selectedRecentSwatchIds.length + bulkSwatchFiles.length + folderSwatchJobs.length;
+                            const parts: string[] = [];
+                            if (selectedRecentSwatchIds.length > 0) parts.push(`${selectedRecentSwatchIds.length} recent`);
+                            if (bulkSwatchFiles.length > 0) parts.push(`${bulkSwatchFiles.length} ${bulkSwatchFiles.length === 1 ? "file" : "files"}`);
+                            if (folderSwatchJobs.length > 0) parts.push(`${folderSwatchJobs.length} from folder`);
+                            return `Queue: ${total} total (${parts.join(", ")})`;
+                          })()}
                         </div>
                       )}
 
@@ -2333,7 +2570,7 @@ const stepTextStyle: CSSProperties = {
                         onClick={generateBulkPreviews}
                         disabled={
                           bulkPreviewLoading ||
-                          (bulkSwatchFiles.length === 0 && selectedRecentSwatchIds.length === 0)
+                          (bulkSwatchFiles.length === 0 && selectedRecentSwatchIds.length === 0 && folderSwatchJobs.length === 0)
                         }
                         style={{
                           width: "100%",
@@ -2342,18 +2579,18 @@ const stepTextStyle: CSSProperties = {
                           border: "1px solid #111827",
                           background:
                             bulkPreviewLoading ||
-                            (bulkSwatchFiles.length === 0 && selectedRecentSwatchIds.length === 0)
+                            (bulkSwatchFiles.length === 0 && selectedRecentSwatchIds.length === 0 && folderSwatchJobs.length === 0)
                               ? "#9ca3af"
                               : "#111827",
                           color: "#ffffff",
                           cursor:
                             bulkPreviewLoading ||
-                            (bulkSwatchFiles.length === 0 && selectedRecentSwatchIds.length === 0)
+                            (bulkSwatchFiles.length === 0 && selectedRecentSwatchIds.length === 0 && folderSwatchJobs.length === 0)
                               ? "not-allowed"
                               : "pointer",
                           opacity:
                             bulkPreviewLoading ||
-                            (bulkSwatchFiles.length === 0 && selectedRecentSwatchIds.length === 0)
+                            (bulkSwatchFiles.length === 0 && selectedRecentSwatchIds.length === 0 && folderSwatchJobs.length === 0)
                               ? 0.8
                               : 1,
                           minHeight: "44px",
