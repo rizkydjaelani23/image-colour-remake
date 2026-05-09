@@ -12,6 +12,8 @@ const pageStyle: CSSProperties = {
   padding: "28px",
   maxWidth: "860px",
   margin: "0 auto",
+  background: "#f1f5f9",
+  minHeight: "100vh",
 };
 
 const sectionStyle: CSSProperties = {
@@ -20,12 +22,12 @@ const sectionStyle: CSSProperties = {
   background: "#ffffff",
   padding: "28px",
   marginBottom: "20px",
-  boxShadow: "0 2px 8px rgba(15,23,42,0.04)",
+  boxShadow: "0 2px 12px rgba(15,23,42,0.05)",
 };
 
 const h2Style: CSSProperties = {
   margin: "0 0 6px 0",
-  fontSize: "20px",
+  fontSize: "18px",
   fontWeight: 800,
   color: "#0f172a",
 };
@@ -52,7 +54,7 @@ const stepNumStyle: CSSProperties = {
   minWidth: "32px",
   height: "32px",
   borderRadius: "50%",
-  background: "#0f172a",
+  background: "#4f46e5",
   color: "#fff",
   fontSize: "13px",
   fontWeight: 800,
@@ -124,7 +126,10 @@ export default function InstructionsPage() {
   return (
     <div style={pageStyle}>
       <div style={{ marginBottom: "24px" }}>
-        <h1 style={{ margin: "0 0 6px 0", fontSize: "28px", fontWeight: 800, color: "#0f172a" }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", padding: "4px 12px", borderRadius: "999px", background: "#eef2ff", border: "1px solid #c7d2fe", color: "#4338ca", fontSize: "11px", fontWeight: 800, marginBottom: "12px", letterSpacing: "0.06em", textTransform: "uppercase" }}>
+          📖 Setup guide
+        </div>
+        <h1 style={{ margin: "0 0 6px 0", fontSize: "28px", fontWeight: 900, color: "#0f172a", letterSpacing: "-0.02em" }}>
           Instructions
         </h1>
         <p style={{ margin: 0, fontSize: "15px", color: "#64748b", lineHeight: 1.6 }}>

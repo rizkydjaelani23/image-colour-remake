@@ -34,7 +34,7 @@ const pageStyle: CSSProperties = {
   padding: "24px",
   maxWidth: "900px",
   margin: "0 auto",
-  background: "#f8fafc",
+  background: "#f1f5f9",
   minHeight: "100vh",
 };
 
@@ -77,12 +77,16 @@ export default function Plans() {
   return (
     <div style={pageStyle}>
       <div style={{ marginBottom: "28px" }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", padding: "4px 12px", borderRadius: "999px", background: "#faf5ff", border: "1px solid #d8b4fe", color: "#7c3aed", fontSize: "11px", fontWeight: 800, marginBottom: "12px", letterSpacing: "0.06em", textTransform: "uppercase" as const }}>
+          ⭐ Billing
+        </div>
         <h1
           style={{
             margin: "0 0 8px 0",
             fontSize: "28px",
-            fontWeight: 800,
+            fontWeight: 900,
             color: "#0f172a",
+            letterSpacing: "-0.02em",
           }}
         >
           Your plan
@@ -502,8 +506,8 @@ export default function Plans() {
                 marginTop: "20px",
                 padding: "14px 16px",
                 borderRadius: "12px",
-                background: "#111827",
-                border: "1px solid #111827",
+                background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                border: "none",
                 color: "#ffffff",
                 textAlign: "center",
                 fontSize: "14px",
@@ -511,11 +515,12 @@ export default function Plans() {
                 cursor: redirectingPlan === "pro" ? "not-allowed" : "pointer",
                 opacity: redirectingPlan === "pro" ? 0.7 : 1,
                 width: "100%",
+                boxShadow: "0 4px 14px rgba(99,102,241,0.35)",
               }}
             >
               {redirectingPlan === "pro"
                 ? "Opening Shopify billing..."
-                : "Upgrade to Pro"}
+                : "Upgrade to Pro \u2192"}
             </button>
           )}
         </div>

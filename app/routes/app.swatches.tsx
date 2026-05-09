@@ -39,15 +39,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
   } satisfies LoaderData;
 }
 
-const pageStyle: CSSProperties = { padding: "24px", maxWidth: "1440px", margin: "0 auto" };
+const pageStyle: CSSProperties = { padding: "24px", maxWidth: "1440px", margin: "0 auto", background: "#f1f5f9", minHeight: "100vh" };
 
 const cardStyle: CSSProperties = {
   border: "1px solid #e5e7eb",
-  borderRadius: "18px",
+  borderRadius: "20px",
   background: "#ffffff",
-  padding: "20px",
-  boxShadow: "0 2px 8px rgba(15,23,42,0.04)",
-  marginBottom: "20px",
+  padding: "22px",
+  boxShadow: "0 2px 12px rgba(15,23,42,0.05)",
+  marginBottom: "16px",
 };
 
 export default function SwatchLibraryPage() {
@@ -101,7 +101,10 @@ export default function SwatchLibraryPage() {
   return (
     <div style={pageStyle}>
       <div style={{ marginBottom: "24px" }}>
-        <h1 style={{ margin: "0 0 6px 0", fontSize: "28px", fontWeight: 800, color: "#0f172a" }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", padding: "4px 12px", borderRadius: "999px", background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", fontSize: "11px", fontWeight: 800, marginBottom: "12px", letterSpacing: "0.06em", textTransform: "uppercase" as const }}>
+          🧵 Fabric library
+        </div>
+        <h1 style={{ margin: "0 0 6px 0", fontSize: "28px", fontWeight: 900, color: "#0f172a", letterSpacing: "-0.02em" }}>
           Swatch Library
         </h1>
         <p style={{ margin: 0, fontSize: "15px", color: "#64748b", lineHeight: 1.6 }}>
@@ -111,14 +114,14 @@ export default function SwatchLibraryPage() {
 
       {/* Stats + search row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px", marginBottom: "20px", flexWrap: "wrap" }}>
-        <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
           {[
-            { label: "Total swatches", value: swatches.length },
-            { label: "Fabric families", value: totalFamilies },
+            { label: "Total swatches", value: swatches.length, bg: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "#bbf7d0", labelColor: "#059669", valColor: "#14532d" },
+            { label: "Fabric families", value: totalFamilies, bg: "linear-gradient(135deg,#eef2ff,#e0e7ff)", border: "#c7d2fe", labelColor: "#4f46e5", valColor: "#1e1b4b" },
           ].map((stat) => (
-            <div key={stat.label} style={{ border: "1px solid #e5e7eb", borderRadius: "12px", background: "#fff", padding: "12px 18px" }}>
-              <div style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 700, marginBottom: "2px" }}>{stat.label.toUpperCase()}</div>
-              <div style={{ fontSize: "24px", fontWeight: 900, color: "#0f172a" }}>{stat.value}</div>
+            <div key={stat.label} style={{ border: `1px solid ${stat.border}`, borderRadius: "16px", background: stat.bg, padding: "14px 20px", minWidth: "140px" }}>
+              <div style={{ fontSize: "11px", color: stat.labelColor, fontWeight: 800, marginBottom: "4px", textTransform: "uppercase" as const, letterSpacing: "0.06em" }}>{stat.label}</div>
+              <div style={{ fontSize: "28px", fontWeight: 900, color: stat.valColor }}>{stat.value}</div>
             </div>
           ))}
         </div>
