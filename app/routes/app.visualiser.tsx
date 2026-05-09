@@ -656,6 +656,10 @@ export default function VisualiserPage() {
     setSelectedRecentSwatchIds([]);
   }
 
+  function selectAllRecentSwatches() {
+    setSelectedRecentSwatchIds(recentSwatches.map((s) => s.id));
+  }
+
   // Legacy single-pick helper kept for clarity - not used in UI anymore
   function selectRecentSwatch(swatch: {
     colourName: string;
@@ -2024,47 +2028,50 @@ const stepTextStyle: CSSProperties = {
                         >
                           Recently used colours
                         </div>
-                        {selectedRecentSwatchIds.length > 0 ? (
-                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                            <div
-                              style={{
-                                fontSize: "12px",
-                                color: "#1d4ed8",
-                                fontWeight: 700,
-                              }}
-                            >
-                              {selectedRecentSwatchIds.length} selected
-                            </div>
-                            <button
-                              type="button"
-                              onClick={clearRecentSwatchSelection}
-                              style={{
-                                padding: "4px 10px",
-                                borderRadius: "6px",
-                                border: "1px solid #d1d5db",
-                                background: "#ffffff",
-                                color: "#111827",
-                                cursor: "pointer",
-                                fontSize: "12px",
-                                fontWeight: 600,
-                              }}
-                            >
-                              Clear all
-                            </button>
+                        {recentSwatches.length > 0 && (
+                          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                            {selectedRecentSwatchIds.length > 0 && (
+                              <div style={{ fontSize: "12px", color: "#1d4ed8", fontWeight: 700 }}>
+                                {selectedRecentSwatchIds.length}/{recentSwatches.length}
+                              </div>
+                            )}
+                            {selectedRecentSwatchIds.length < recentSwatches.length && (
+                              <button
+                                type="button"
+                                onClick={selectAllRecentSwatches}
+                                style={{
+                                  padding: "4px 10px",
+                                  borderRadius: "6px",
+                                  border: "1px solid #bfdbfe",
+                                  background: "#eff6ff",
+                                  color: "#1d4ed8",
+                                  cursor: "pointer",
+                                  fontSize: "12px",
+                                  fontWeight: 700,
+                                }}
+                              >
+                                Select all
+                              </button>
+                            )}
+                            {selectedRecentSwatchIds.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={clearRecentSwatchSelection}
+                                style={{
+                                  padding: "4px 10px",
+                                  borderRadius: "6px",
+                                  border: "1px solid #d1d5db",
+                                  background: "#ffffff",
+                                  color: "#6b7280",
+                                  cursor: "pointer",
+                                  fontSize: "12px",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                Clear
+                              </button>
+                            )}
                           </div>
-                        ) : (
-                          recentSwatches.length > 0 && (
-                            <div
-                              style={{
-                                fontSize: "12px",
-                                color: "#64748b",
-                                fontWeight: 600,
-                              }}
-                            >
-                              {recentSwatches.length}{" "}
-                              {recentSwatches.length === 1 ? "colour" : "colours"}
-                            </div>
-                          )
                         )}
                       </div>
 
