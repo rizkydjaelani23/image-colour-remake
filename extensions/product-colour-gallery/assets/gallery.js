@@ -194,6 +194,16 @@
                     .join("")}
                 </div>
 
+                ${selectedPreview ? `
+                  <div class="pcg-mobile-preview" id="pcg-mobile-preview">
+                    <img src="${selectedPreview.imageUrl}" alt="${escapeHtml(selectedPreview.colourName)}" />
+                    <div class="pcg-mobile-preview-label">
+                      <span class="pcg-check">✓</span>
+                      ${escapeHtml(selectedPreview.colourName)}
+                    </div>
+                  </div>
+                ` : ""}
+
                 <div class="pcg-gallery-layout">
                   <div class="pcg-side-column">
                     <div class="pcg-side-grid">
@@ -255,6 +265,15 @@
               selectedPreview = match;
               render();
               swapMainProductMedia(match);
+
+              // On mobile, scroll the in-gallery preview into view
+              // so the customer sees the result without scrolling up
+              if (window.innerWidth <= 749) {
+                const mobilePreview = root.querySelector("#pcg-mobile-preview");
+                if (mobilePreview) {
+                  mobilePreview.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                }
+              }
             });
           });
 
