@@ -1,6 +1,16 @@
 (function () {
 
   // ── Lazy / eager image loader ─────────────────────────────────────────────
+  // activeObservers tracks every IntersectionObserver we create so we can
+  // disconnect them all before rebuilding the DOM (family tab change / toggle).
+  // Without this, old observers linger in memory pointing at detached nodes.
+  var activeObservers = [];
+
+  function disconnectObservers() {
+    activeObservers.forEach(function (obs) { obs.disconnect(); });
+    activeObservers = [];
+  }
+
   function lazyLoadImages(container, eagerCount) {
     eagerCount = eagerCount || 4;
     const imgs = Array.from(container.querySelectorAll("img.pcg-lazy"));
@@ -30,6 +40,7 @@
           { rootMargin: "80px" }
         );
         observer.observe(img);
+        activeObservers.push(observer);
       } else {
         setTimeout(() => {
           const src = img.dataset.src;
@@ -177,6 +188,10 @@
 
     // ── full render (open/close and family change only) ───────────────────
     function render() {
+      // Always clean up observers before wiping the DOM — prevents memory leaks
+      // from detached IntersectionObserver instances on family/tab changes.
+      disconnectObservers();
+
       const currentItems   = grouped[activeFamily] || [];
       const previousGrid   = root.querySelector(".pcg-side-grid");
       const previousScroll = previousGrid ? previousGrid.scrollTop : 0;
