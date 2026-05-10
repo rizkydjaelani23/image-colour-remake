@@ -209,15 +209,24 @@ async function buildRealisticComposite(params: {
         .toBuffer();
 
       const textureLight = await sharp(softenedTextureForBlend)
-        .linear(renderMode === "smooth-colour" ? 0.10 : 0.15, renderMode === "smooth-colour" ? 118 : 109)  // smooth-colour: lifted from 0.05 to show more texture
+        .linear(renderMode === "smooth-colour" ? 0.10 : 0.15, renderMode === "smooth-colour" ? 118 : 109)
         .png()
         .toBuffer();
+
+      // For smooth-colour: compress the maskedLighting range toward neutral (128)
+      // before the soft-light blend. Product photos are typically bright (lum 150-200),
+      // which causes soft-light to LIFT dark fabrics (navy→mid-blue, charcoal→grey).
+      // linear(0.55, 58): maps 0→58, 128→128, 255→198 — reduces effect in both directions
+      // while keeping the neutral point identical so mid-tones are unaffected.
+      const maskedLightingForBlend = renderMode === "smooth-colour"
+        ? await sharp(maskedLighting).linear(0.55, 58).png().toBuffer()
+        : maskedLighting;
 
       // For soft-texture fabrics: the soft-light blend desaturates colour heavily,
       // so we apply less lighting and then boost saturation back to preserve chroma.
       const colouredFabric = await sharp(mainFabricLayer)
         .composite([
-          { input: maskedLighting, blend: "soft-light" },
+          { input: maskedLightingForBlend, blend: "soft-light" },
           { input: textureLight, blend: "soft-light" },
         ])
         .modulate({
@@ -258,8 +267,6 @@ async function buildRealisticComposite(params: {
     const idx = i * 4;
 
     const maskValue = maskRaw.data[i] / 255;
-    const alphaBase = renderMode === "smooth-colour" ? 0.90 : blendStrength;  // was 0.80 — strong coverage so grey base can't bleed through
-    const alpha = Math.max(0, Math.min(1, maskValue * alphaBase));
 
     const br = baseRaw.data[idx];
     const bg = baseRaw.data[idx + 1];
@@ -278,14 +285,26 @@ async function buildRealisticComposite(params: {
       continue;
     }
 
-    // ── Per-pixel luminosity cap ──────────────────────────────────────────
-    // If the generated fabric colour is significantly brighter than the source
-    // pixel, scale it back down to match. This stops bright product images from
-    // making the output colour look washed out / over-saturated.
-    // The cap is tighter for smooth-colour (plush/velvet) fabrics.
-    const sourceLum    = 0.299 * br  + 0.587 * bg  + 0.114 * bb;
-    const fabricLumRaw = 0.299 * fr  + 0.587 * fg  + 0.114 * fb;
-    const lumCap = renderMode === "smooth-colour" ? 1.55 : 1.14;  // was 1.20 — wide cap: light colours on a grey base must be allowed through
+    // ── Per-pixel luminosity values ───────────────────────────────────────
+    const sourceLum    = 0.299 * br + 0.587 * bg + 0.114 * bb;
+    const fabricLumRaw = 0.299 * fr + 0.587 * fg + 0.114 * fb;
+
+    // ── Adaptive alpha ────────────────────────────────────────────────────
+    // Dark fabric swatches (navy, charcoal, black) need higher opacity so a
+    // bright product base can't bleed through and lift them toward grey.
+    // Light swatches use standard alpha.
+    const isDarkFabric = fabricLumRaw < 85;
+    const alphaBase = renderMode === "smooth-colour"
+      ? (isDarkFabric ? 0.93 : 0.90)
+      : blendStrength;
+    const alpha = Math.max(0, Math.min(1, maskValue * alphaBase));
+
+    // ── Luminosity cap ────────────────────────────────────────────────────
+    // smooth-colour: cap is very loose (2.50) — effectively disabled.
+    // The maskedLighting compression above already prevents over-brightening.
+    // Keeping it as a safety net only for extreme edge cases.
+    // soft-texture: keep a tighter cap to prevent washed-out colours.
+    const lumCap = renderMode === "smooth-colour" ? 2.50 : 1.14;
     if (fabricLumRaw > 10 && fabricLumRaw > sourceLum * lumCap) {
       const lumScale = (sourceLum * lumCap) / fabricLumRaw;
       fr = Math.min(255, Math.round(fr * lumScale));
@@ -302,11 +321,11 @@ async function buildRealisticComposite(params: {
     const nb = Math.round(bb * (1 - neutralMix) + lum * neutralMix);
 
     const finalLum = 0.299 * fr + 0.587 * fg + 0.114 * fb;
-    const isDarkFabric = finalLum < 115;
+    const isDarkFabricFinal = finalLum < 115;
     const boost =
       renderMode === "smooth-colour"
-        ? (isDarkFabric ? 1.02 : 1.0)
-        : (isDarkFabric ? 0.96 : 0.99);
+        ? (isDarkFabricFinal ? 1.02 : 1.0)
+        : (isDarkFabricFinal ? 0.96 : 0.99);
 
     out[idx] = Math.max(0, Math.min(255, Math.round(nr * (1 - alpha) + fr * boost * alpha)));
     out[idx + 1] = Math.max(0, Math.min(255, Math.round(ng * (1 - alpha) + fg * boost * alpha)));
