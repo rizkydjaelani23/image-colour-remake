@@ -157,15 +157,12 @@
   display: block;
   border-radius: 10px;
   margin-bottom: 8px;
-  object-fit: cover;
-  /* Skeleton shimmer while lazy-loading */
-  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
-  background-size: 200% 100%;
-  animation: pcg-shimmer 1.4s infinite;
+  object-fit: contain;       /* show full product — no cropping */
+  background: #f5f5f5;       /* neutral fill for letterbox areas */
   transition: opacity 0.2s ease;
 }
 
-/* Once src is set the shimmer stops naturally and image fades in */
+/* Hide img until src is set — the white card acts as the placeholder */
 .pcg-card img[src=""] {
   opacity: 0;
 }
@@ -229,8 +226,9 @@
 .pcg-colour-preview img {
   width: 100%;
   display: block;
-  max-height: 340px;   /* a bit taller on desktop */
-  object-fit: cover;
+  height: 320px;         /* fixed height so cards don't jump between products */
+  object-fit: contain;   /* show full product — no cropping */
+  background: #f5f5f5;   /* neutral fill for any letterbox gaps */
 }
 
 .pcg-preview-label {
@@ -287,7 +285,7 @@
   }
 
   .pcg-colour-preview img {
-    max-height: 260px;  /* slightly smaller on mobile */
+    height: 240px;  /* slightly smaller on mobile */
   }
 
   /* Make cards slightly larger and easier to tap */
