@@ -9,7 +9,11 @@
     imgs.forEach((img, i) => {
       if (i < eagerCount) {
         const src = img.dataset.src;
-        if (src) { img.src = src; img.removeAttribute("data-src"); }
+        if (src) {
+          img.src = src;
+          img.removeAttribute("data-src");
+          if (i === 0) img.setAttribute("fetchpriority", "high");
+        }
         return;
       }
       if ("IntersectionObserver" in window) {
@@ -146,7 +150,7 @@
       if (existing) {
         // Update in-place — no DOM recreation
         const img = existing.querySelector("img");
-        if (img) { img.src = match.imageUrl; img.alt = escapeHtml(match.colourName); }
+        if (img) { img.src = shopifyImgUrl(match.imageUrl, 600); img.alt = escapeHtml(match.colourName); }
         const label = existing.querySelector(".pcg-preview-label");
         if (label) label.innerHTML = `<span class="pcg-check">✓</span> ${escapeHtml(match.colourName)}`;
       } else {
@@ -155,7 +159,7 @@
         panel.className = "pcg-colour-preview";
         panel.id = "pcg-colour-preview";
         panel.innerHTML = `
-          <img src="${escapeAttr(match.imageUrl)}"
+          <img src="${escapeAttr(shopifyImgUrl(match.imageUrl, 600))}"
                alt="${escapeHtml(match.colourName)}"
                decoding="async" />
           <div class="pcg-preview-label">
@@ -211,7 +215,7 @@
 
               ${selectedPreview && showColourPreview ? `
                 <div class="pcg-colour-preview" id="pcg-colour-preview">
-                  <img src="${escapeAttr(selectedPreview.imageUrl)}"
+                  <img src="${escapeAttr(shopifyImgUrl(selectedPreview.imageUrl, 600))}"
                        alt="${escapeHtml(selectedPreview.colourName)}"
                        decoding="async" />
                   <div class="pcg-preview-label">
@@ -231,9 +235,10 @@
                         <img
                           class="pcg-lazy"
                           src=""
-                          data-src="${escapeAttr(item.imageUrl)}"
+                          data-src="${escapeAttr(shopifyImgUrl(item.imageUrl, 160))}"
                           alt="${escapeHtml(item.colourName)}"
                           decoding="async"
+                          loading="lazy"
                           width="120"
                           height="120"
                         />
@@ -300,6 +305,18 @@
       .replaceAll("'", "&#39;");
   }
   function escapeAttr(value) { return escapeHtml(value); }
+
+  // ── Shopify CDN image resizer ─────────────────────────────────────────────
+  // Appends ?width=N to Shopify CDN URLs so the CDN serves a smaller image.
+  // Falls back to the original URL for non-Shopify hosts (no breakage).
+  function shopifyImgUrl(url, width) {
+    if (!url || !url.includes("cdn.shopify.com")) return url;
+    try {
+      const u = new URL(url);
+      u.searchParams.set("width", String(width));
+      return u.toString();
+    } catch (_) { return url; }
+  }
 
   document.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll(".pcg-root").forEach(initColourGallery);
