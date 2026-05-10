@@ -133,68 +133,107 @@
     }
 
     // ── Main product image swap ───────────────────────────────────────────
-    // Used when showColourPreview is false — swaps the page's main product
-    // image to the colour preview rather than rendering an inline panel.
-    var _mainImgEl         = null;
-    var _mainImgOrigSrc    = null;
-    var _mainImgOrigSrcset = null;
+    // Used when showColourPreview is false.
+    //
+    // WHY OVERLAY instead of modifying the existing <img>:
+    // Modern Shopify themes (Dawn etc.) use <picture><source srcset="...">
+    // which the browser always prefers over <img src>. Theme JS also resets
+    // src/srcset when it detects external changes. So instead we inject our
+    // own <img> element as an absolutely-positioned overlay on top of the
+    // product image area — we never touch the original DOM at all.
+    var _overlayEl = null;
 
-    function findMainProductImage() {
-      // Try common Shopify theme selectors in order of specificity.
-      // Covers Dawn (default), Debut, Brooklyn, Narrative and most paid themes.
-      var selectors = [
-        ".product__media-item--first img",   // Dawn — featured/first slide
-        ".product__media-item img",           // Dawn — any slide
-        ".product__media img",               // Dawn wrapper fallback
-        "#ProductPhotoImg",                  // Debut
-        "[data-product-featured-image]",     // Debut / Brooklyn attr
-        ".product-featured-media img",       // Narrative
-        ".product-single__photo img",        // Brooklyn
-        ".product-image img",               // generic
+    function findProductImageArea() {
+      // Returns the container element that wraps the main product image.
+      // Ordered from most-specific to most-generic.
+      var candidates = [
+        // Dawn v10+ (Shopify default) — featured media container
+        ".product__media-item--first .product-media-container",
+        ".product__media-item--first",
+        // Dawn — active slide if featured slide isn't found
+        ".product__media-item.slider__slide--active",
+        ".product__media-item",
+        // Debut
+        ".product__photo-container",
+        "#ProductPhotoContain",
+        // Brooklyn / Narrative
+        ".product-single__photo-wrapper",
+        ".product__featured-media",
+        // Refresh, Sense, Craft (modern free themes)
+        ".product-media-container",
+        ".media-gallery__item:first-child",
+        // Generic
+        ".product__media",
+        ".product-image",
+        "[data-product-media-type-image]",
       ];
-      for (var i = 0; i < selectors.length; i++) {
-        var el = document.querySelector(selectors[i]);
-        if (el && el.tagName === "IMG") return el;
+      for (var i = 0; i < candidates.length; i++) {
+        var el = document.querySelector(candidates[i]);
+        if (el) return el;
       }
+      // Absolute last resort: find the first Shopify CDN image in <main> and
+      // use its parent element as the container.
+      var cdnImgs = document.querySelectorAll(
+        "main img[srcset*='cdn.shopify'], main img[src*='cdn.shopify']"
+      );
+      if (cdnImgs.length) return cdnImgs[0].parentElement;
       return null;
     }
 
     function swapMainImage(url, isDeselect) {
-      if (!_mainImgEl) _mainImgEl = findMainProductImage();
-      var img = _mainImgEl;
-      if (!img) return; // theme uses an unrecognised structure — fail silently
-
       if (isDeselect || !url) {
-        if (_mainImgOrigSrc === null) return; // nothing saved yet, nothing to restore
-        img.style.transition = "opacity 0.3s ease";
-        img.style.opacity    = "0";
+        if (!_overlayEl) return;
+        var leaving = _overlayEl;
+        _overlayEl = null;
+        leaving.style.opacity = "0";
         setTimeout(function () {
-          img.src = _mainImgOrigSrc;
-          if (_mainImgOrigSrcset !== null) img.srcset = _mainImgOrigSrcset;
-          else img.removeAttribute("srcset");
-          img.style.opacity  = "1";
-          // Reset so we re-query on the next selection (DOM may have changed)
-          _mainImgOrigSrc    = null;
-          _mainImgOrigSrcset = null;
-          _mainImgEl         = null;
-        }, 300);
+          if (leaving.parentNode) leaving.parentNode.removeChild(leaving);
+        }, 380);
         return;
       }
 
-      // Save originals on the very first swap so we can restore them later
-      if (_mainImgOrigSrc === null) {
-        _mainImgOrigSrc    = img.src;
-        _mainImgOrigSrcset = img.getAttribute("srcset") || null;
+      // If we already have an overlay, just crossfade to the new image
+      if (_overlayEl) {
+        var current = _overlayEl;
+        current.style.opacity = "0";
+        setTimeout(function () {
+          current.src = shopifyImgUrl(url, 800);
+          current.style.opacity = "1";
+        }, 200);
+        return;
       }
 
-      // Crossfade into the colour preview image
-      img.style.transition = "opacity 0.3s ease";
-      img.style.opacity    = "0";
-      setTimeout(function () {
-        img.src = shopifyImgUrl(url, 800);
-        img.removeAttribute("srcset"); // prevent srcset from overriding our src
-        img.style.opacity = "1";
-      }, 300);
+      var area = findProductImageArea();
+      if (!area) return; // unknown theme structure — fail silently
+
+      // The container must be relatively positioned so our absolute child works
+      if (window.getComputedStyle(area).position === "static") {
+        area.style.position = "relative";
+      }
+
+      var overlay = document.createElement("img");
+      overlay.setAttribute("id", "pcg-main-img-overlay");
+      overlay.setAttribute("alt", "");
+      overlay.setAttribute("decoding", "async");
+      // Cover the entire area; pointer-events off so clicks still reach theme UI
+      overlay.style.cssText =
+        "position:absolute;top:0;left:0;width:100%;height:100%;" +
+        "object-fit:cover;z-index:9;opacity:0;" +
+        "transition:opacity 0.35s ease;pointer-events:none;";
+
+      function show() { overlay.style.opacity = "1"; }
+      overlay.addEventListener("load", show);
+      overlay.onerror = function () {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        if (_overlayEl === overlay) _overlayEl = null;
+      };
+      overlay.src = shopifyImgUrl(url, 800);
+
+      area.appendChild(overlay);
+      _overlayEl = overlay;
+
+      // Trigger fade-in even when image was already cached (load won't fire)
+      requestAnimationFrame(function () { requestAnimationFrame(show); });
     }
 
     // ── colour preview panel (shown inside the gallery, no main image swap) ─
