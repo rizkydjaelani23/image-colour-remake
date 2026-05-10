@@ -209,7 +209,7 @@ async function buildRealisticComposite(params: {
         .toBuffer();
 
       const textureLight = await sharp(softenedTextureForBlend)
-        .linear(renderMode === "smooth-colour" ? 0.05 : 0.15, renderMode === "smooth-colour" ? 122 : 109)
+        .linear(renderMode === "smooth-colour" ? 0.10 : 0.15, renderMode === "smooth-colour" ? 118 : 109)  // smooth-colour: lifted from 0.05 to show more texture
         .png()
         .toBuffer();
 
@@ -221,8 +221,8 @@ async function buildRealisticComposite(params: {
           { input: textureLight, blend: "soft-light" },
         ])
         .modulate({
-          brightness: renderMode === "smooth-colour" ? 0.85 : 0.99,  // was 0.90
-          saturation: renderMode === "smooth-colour" ? 1.0  : 1.20,  // was 1.02
+          brightness: renderMode === "smooth-colour" ? 0.93 : 0.99,  // was 0.88 — pushed up so grey base can't drown the colour
+          saturation: renderMode === "smooth-colour" ? 1.15 : 1.20,  // was 1.06 — strong chroma recovery after soft-light desaturation
         })
         .gamma(1.01)
         .png()
@@ -258,7 +258,7 @@ async function buildRealisticComposite(params: {
     const idx = i * 4;
 
     const maskValue = maskRaw.data[i] / 255;
-    const alphaBase = renderMode === "smooth-colour" ? 0.78 : blendStrength;  // was 0.82
+    const alphaBase = renderMode === "smooth-colour" ? 0.90 : blendStrength;  // was 0.80 — strong coverage so grey base can't bleed through
     const alpha = Math.max(0, Math.min(1, maskValue * alphaBase));
 
     const br = baseRaw.data[idx];
@@ -285,7 +285,7 @@ async function buildRealisticComposite(params: {
     // The cap is tighter for smooth-colour (plush/velvet) fabrics.
     const sourceLum    = 0.299 * br  + 0.587 * bg  + 0.114 * bb;
     const fabricLumRaw = 0.299 * fr  + 0.587 * fg  + 0.114 * fb;
-    const lumCap = renderMode === "smooth-colour" ? 1.04 : 1.14;
+    const lumCap = renderMode === "smooth-colour" ? 1.55 : 1.14;  // was 1.20 — wide cap: light colours on a grey base must be allowed through
     if (fabricLumRaw > 10 && fabricLumRaw > sourceLum * lumCap) {
       const lumScale = (sourceLum * lumCap) / fabricLumRaw;
       fr = Math.min(255, Math.round(fr * lumScale));
@@ -334,10 +334,10 @@ async function createSmoothColourLayer(
     .resize(width, height, {
       fit: "fill",
     })
-    .blur(14)
+    .blur(7)   // was 14 — reduced to preserve swatch texture/pattern
     .modulate({
-      brightness: 0.94,   // was 0.98 — pull down before compositing
-      saturation: 1.0,    // was 1.18 — no saturation pump; swatch colour as-is
+      brightness: 0.97,   // lifted — preserve swatch brightness before compositing
+      saturation: 1.15,   // stronger pump so swatch colour comes through clearly
     })
     .png()
     .toBuffer();
