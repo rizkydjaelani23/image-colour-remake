@@ -87,27 +87,21 @@
         </div>`;
     }
 
-    // ── Fetch with sessionStorage cache ──────────────────────────────────
-    // On first visit: fetch from API and cache the result.
-    // On back-navigation or re-render in the same session: instant load from cache.
+    // ── Fetch gallery data ────────────────────────────────────────────────
+    // No sessionStorage — the HTTP Cache-Control header (max-age=120,
+    // stale-while-revalidate=300) handles caching at the browser/CDN level.
+    // sessionStorage caused merchants' changes (approve/hide) to not reflect
+    // for the entire browser session, which broke the storefront toggle.
     let data;
-    const cacheKey = `pcg:${shop}:${numericProductId}`;
     try {
-      const cached = sessionStorage.getItem(cacheKey);
-      if (cached) {
-        data = JSON.parse(cached);
-      } else {
-        const response = await fetch(
-          `/apps/colour-gallery?shop=${encodeURIComponent(shop)}&productId=${encodeURIComponent(gidProductId)}`
-        );
-        const rawText = await response.text();
-        try { data = rawText ? JSON.parse(rawText) : null; }
-        catch { throw new Error(`Non-JSON response: ${rawText || "empty"}`); }
-        if (!response.ok) throw new Error((data && data.error) || "Failed to load previews");
-        if (!data) throw new Error("Empty response from storefront previews API");
-        // Cache for this session
-        try { sessionStorage.setItem(cacheKey, JSON.stringify(data)); } catch (_) {}
-      }
+      const response = await fetch(
+        `/apps/colour-gallery?shop=${encodeURIComponent(shop)}&productId=${encodeURIComponent(gidProductId)}`
+      );
+      const rawText = await response.text();
+      try { data = rawText ? JSON.parse(rawText) : null; }
+      catch { throw new Error(`Non-JSON response: ${rawText || "empty"}`); }
+      if (!response.ok) throw new Error((data && data.error) || "Failed to load previews");
+      if (!data) throw new Error("Empty response from storefront previews API");
     } catch (error) {
       console.error("Product colour gallery error:", error);
       root.innerHTML = "";
