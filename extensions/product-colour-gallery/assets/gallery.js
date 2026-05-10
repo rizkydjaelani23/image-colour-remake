@@ -253,7 +253,6 @@
                           data-src="${escapeAttr(shopifyImgUrl(item.imageUrl, 160))}"
                           alt="${escapeHtml(item.colourName)}"
                           decoding="async"
-                          loading="lazy"
                           width="120"
                           height="120"
                         />
@@ -333,8 +332,23 @@
     } catch (_) { return url; }
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
-    document.querySelectorAll(".pcg-root").forEach(initColourGallery);
-  });
+  // ── Initialisation ────────────────────────────────────────────────────────
+  // Uses data-pcg-ready to guard against double-init if this runs twice.
+  // Checks readyState so it works whether the script loads before OR after
+  // DOMContentLoaded — mobile browsers on slow connections often load scripts
+  // later, causing DOMContentLoaded to fire before the listener is registered.
+  function tryInit() {
+    document.querySelectorAll(".pcg-root:not([data-pcg-ready])").forEach((el) => {
+      el.setAttribute("data-pcg-ready", "");
+      initColourGallery(el);
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", tryInit);
+  } else {
+    // DOM already parsed — run immediately
+    tryInit();
+  }
 
 })();
