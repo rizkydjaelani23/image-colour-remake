@@ -244,11 +244,11 @@
                         <img
                           class="pcg-lazy"
                           src=""
-                          data-src="${escapeAttr(shopifyImgUrl(item.imageUrl, 160))}"
+                          data-src="${escapeAttr(shopifyImgUrl(item.imageUrl, 120))}"
                           alt="${escapeHtml(item.colourName)}"
                           decoding="async"
-                          width="120"
-                          height="120"
+                          width="90"
+                          height="90"
                         />
                         <div class="pcg-card-title">${escapeHtml(item.colourName)}</div>
                       </button>
