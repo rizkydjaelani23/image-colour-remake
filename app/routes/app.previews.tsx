@@ -6,12 +6,15 @@ import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
 import { getOrCreateShop } from "../utils/shop.server";
 
+type ProductStatus = "ACTIVE" | "DRAFT" | "ARCHIVED";
+
 type ProductSummary = {
   id: string;
   shopifyProductId: string;
   title: string | null;
   imageUrl: string | null;
   previewCount: number;
+  status: ProductStatus | null;
 };
 
 type LoaderData = {
@@ -42,7 +45,7 @@ type LoadedProduct = {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = await getOrCreateShop(session.shop);
 
   const products = await prisma.product.findMany({
@@ -57,6 +60,31 @@ export async function loader({ request }: LoaderFunctionArgs) {
     },
   });
 
+  // Batch-fetch product statuses (Active/Draft/Archived) from Shopify in one call
+  const statusMap: Record<string, ProductStatus> = {};
+  if (products.length > 0) {
+    try {
+      const ids = products.map((p) => p.shopifyProductId);
+      const res = await admin.graphql(
+        `query GetStatuses($ids: [ID!]!) {
+           nodes(ids: $ids) {
+             ... on Product { id status }
+           }
+         }`,
+        { variables: { ids } },
+      );
+      const json = await res.json() as { data?: { nodes?: Array<{ id: string; status: string } | null> } };
+      for (const node of json.data?.nodes ?? []) {
+        if (node?.id && node?.status) {
+          statusMap[node.id] = node.status as ProductStatus;
+        }
+      }
+    } catch (e) {
+      // Degrade gracefully — products still show, just without status badges
+      console.error("Failed to fetch product statuses from Shopify:", e);
+    }
+  }
+
   return {
     productsWithPreviews: products.map((p) => ({
       id: p.id,
@@ -64,6 +92,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       title: p.title,
       imageUrl: p.imageUrl,
       previewCount: p._count.previews,
+      status: statusMap[p.shopifyProductId] ?? null,
     })),
   } satisfies LoaderData;
 }
@@ -172,6 +201,13 @@ export default function PreviewManagerPage() {
   const [batchSaving, setBatchSaving] = useState(false);
   // Regeneration
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  // Filters & sort
+  const [filterStatus, setFilterStatus] = useState<"all" | "DRAFT" | "APPROVED" | "HIDDEN" | "FEATURED">("all");
+  const [filterStorefront, setFilterStorefront] = useState<"all" | "approved" | "unapproved">("all");
+  const [filterFeatured, setFilterFeatured] = useState(false);
+  const [sortPreviews, setSortPreviews] = useState<"featured-first" | "az" | "za">("featured-first");
+  const [sortProducts, setSortProducts] = useState<"az" | "za" | "most" | "least">("az");
+  const [filterProductStatus, setFilterProductStatus] = useState<"all" | ProductStatus>("all");
 
   async function loadPreviews(forcedProductId?: string) {
     const idToUse = (forcedProductId || productId).trim();
@@ -190,6 +226,10 @@ export default function PreviewManagerPage() {
       setLoadedProduct(data.product || null);
       setPreviews(nextPreviews);
       setSelectedIds([]);
+      setFilterStatus("all");
+      setFilterStorefront("all");
+      setFilterFeatured(false);
+      setSortPreviews("featured-first");
 
       setDraftNames(Object.fromEntries(nextPreviews.map((p) => [p.id, p.colourName || ""])));
       setDraftFamilies(Object.fromEntries(nextPreviews.map((p) => [p.id, p.fabricFamily || ""])));
@@ -379,11 +419,33 @@ export default function PreviewManagerPage() {
 
   const filteredProducts = useMemo(() => {
     const q = productSearch.toLowerCase().trim();
-    if (!q) return productsWithPreviews;
-    return productsWithPreviews.filter((p) =>
-      (p.title || "Untitled product").toLowerCase().includes(q)
-    );
-  }, [productsWithPreviews, productSearch]);
+    return productsWithPreviews.filter((p) => {
+      if (q && !(p.title || "Untitled product").toLowerCase().includes(q)) return false;
+      if (filterProductStatus !== "all" && p.status !== filterProductStatus) return false;
+      return true;
+    });
+  }, [productsWithPreviews, productSearch, filterProductStatus]);
+
+  const sortedProducts = useMemo(() => {
+    const arr = [...filteredProducts];
+    if (sortProducts === "za")   arr.sort((a, b) => (b.title || "").localeCompare(a.title || ""));
+    else if (sortProducts === "most")  arr.sort((a, b) => b.previewCount - a.previewCount);
+    else if (sortProducts === "least") arr.sort((a, b) => a.previewCount - b.previewCount);
+    else arr.sort((a, b) => (a.title || "").localeCompare(b.title || "")); // az
+    return arr;
+  }, [filteredProducts, sortProducts]);
+
+  const filteredAndSortedPreviews = useMemo(() => {
+    let result = [...previews];
+    if (filterStatus !== "all")          result = result.filter((p) => p.status === filterStatus);
+    if (filterStorefront === "approved")   result = result.filter((p) => p.approvedForStorefront);
+    if (filterStorefront === "unapproved") result = result.filter((p) => !p.approvedForStorefront);
+    if (filterFeatured)                    result = result.filter((p) => p.featured);
+    if (sortPreviews === "az") result.sort((a, b) => a.colourName.localeCompare(b.colourName));
+    if (sortPreviews === "za") result.sort((a, b) => b.colourName.localeCompare(a.colourName));
+    if (sortPreviews === "featured-first") result.sort((a, b) => Number(b.featured) - Number(a.featured));
+    return result;
+  }, [previews, filterStatus, filterStorefront, filterFeatured, sortPreviews]);
 
   const selectedProductSummary = useMemo(
     () => productsWithPreviews.find((p) => p.shopifyProductId === productId) ?? null,
@@ -412,13 +474,13 @@ export default function PreviewManagerPage() {
 
   const grouped = useMemo(() => {
     const groups: Record<string, PreviewItem[]> = {};
-    for (const preview of previews) {
+    for (const preview of filteredAndSortedPreviews) {
       const key = preview.fabricFamily || "Uncategorised";
       if (!groups[key]) groups[key] = [];
       groups[key].push(preview);
     }
     return groups;
-  }, [previews]);
+  }, [filteredAndSortedPreviews]);
 
   const approvedCount = previews.filter((p) => p.approvedForStorefront).length;
   const featuredCount = previews.filter((p) => p.featured).length;
@@ -474,21 +536,60 @@ export default function PreviewManagerPage() {
               </div>
             )}
 
-            {/* Search */}
-            <input
-              type="search"
-              placeholder={`Search ${productsWithPreviews.length} products…`}
-              value={productSearch}
-              onChange={(e) => setProductSearch(e.target.value)}
-              style={{ ...inputStyle, marginBottom: "8px" }}
-            />
+            {/* Search + sort row */}
+            <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
+              <input
+                type="search"
+                placeholder={`Search ${productsWithPreviews.length} products…`}
+                value={productSearch}
+                onChange={(e) => setProductSearch(e.target.value)}
+                style={{ ...inputStyle, flex: 1, marginBottom: 0 }}
+              />
+              <select
+                value={sortProducts}
+                onChange={(e) => setSortProducts(e.target.value as typeof sortProducts)}
+                style={{ ...inputStyle, width: "auto", flexShrink: 0 }}
+              >
+                <option value="az">A → Z</option>
+                <option value="za">Z → A</option>
+                <option value="most">Most previews</option>
+                <option value="least">Fewest previews</option>
+              </select>
+            </div>
+
+            {/* Status filter pills */}
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "8px" }}>
+              {(["all", "ACTIVE", "DRAFT", "ARCHIVED"] as const).map((s) => {
+                const isActive = filterProductStatus === s;
+                const colours: Record<string, { bg: string; color: string; border: string }> = {
+                  all:      { bg: isActive ? "#111827" : "#f8fafc", color: isActive ? "#fff" : "#475569", border: isActive ? "#111827" : "#e5e7eb" },
+                  ACTIVE:   { bg: isActive ? "#16a34a" : "#f0fdf4", color: isActive ? "#fff" : "#16a34a", border: isActive ? "#16a34a" : "#bbf7d0" },
+                  DRAFT:    { bg: isActive ? "#d97706" : "#fffbeb", color: isActive ? "#fff" : "#d97706", border: isActive ? "#d97706" : "#fde68a" },
+                  ARCHIVED: { bg: isActive ? "#6b7280" : "#f8fafc", color: isActive ? "#fff" : "#6b7280", border: isActive ? "#6b7280" : "#d1d5db" },
+                };
+                const c = colours[s];
+                const count = s === "all"
+                  ? productsWithPreviews.length
+                  : productsWithPreviews.filter((p) => p.status === s).length;
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setFilterProductStatus(s)}
+                    style={{ padding: "5px 12px", borderRadius: "999px", border: `1px solid ${c.border}`, background: c.bg, color: c.color, cursor: "pointer", font: "inherit", fontSize: "12px", fontWeight: 700 }}
+                  >
+                    {s === "all" ? "All" : s.charAt(0) + s.slice(1).toLowerCase()} ({count})
+                  </button>
+                );
+              })}
+            </div>
 
             {/* Scrollable product list */}
             <div style={{ maxHeight: "240px", overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: "12px", background: "#fff" }}>
-              {filteredProducts.length === 0 ? (
+              {sortedProducts.length === 0 ? (
                 <div style={{ padding: "12px 14px", fontSize: "13px", color: "#94a3b8" }}>No products match &ldquo;{productSearch}&rdquo;</div>
               ) : (
-                filteredProducts.map((product, idx) => {
+                sortedProducts.map((product, idx) => {
                   const isSelected = productId === product.shopifyProductId;
                   return (
                     <button
@@ -502,7 +603,7 @@ export default function PreviewManagerPage() {
                       style={{
                         width: "100%", display: "flex", alignItems: "center", gap: "10px",
                         padding: "10px 12px", border: "none",
-                        borderBottom: idx < filteredProducts.length - 1 ? "1px solid #f1f5f9" : "none",
+                        borderBottom: idx < sortedProducts.length - 1 ? "1px solid #f1f5f9" : "none",
                         background: isSelected ? "#f0f9ff" : "#fff",
                         cursor: "pointer", textAlign: "left", font: "inherit",
                       }}
@@ -512,7 +613,19 @@ export default function PreviewManagerPage() {
                       )}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: "13px", fontWeight: isSelected ? 700 : 500, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{product.title || "Untitled product"}</div>
-                        <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "1px" }}>{product.previewCount} preview{product.previewCount !== 1 ? "s" : ""}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "2px" }}>
+                          <span style={{ fontSize: "11px", color: "#94a3b8" }}>{product.previewCount} preview{product.previewCount !== 1 ? "s" : ""}</span>
+                          {product.status && (
+                            <span style={{
+                              fontSize: "10px", fontWeight: 700, padding: "1px 6px", borderRadius: "999px",
+                              background: product.status === "ACTIVE" ? "#f0fdf4" : product.status === "DRAFT" ? "#fffbeb" : "#f8fafc",
+                              color: product.status === "ACTIVE" ? "#16a34a" : product.status === "DRAFT" ? "#d97706" : "#6b7280",
+                              border: `1px solid ${product.status === "ACTIVE" ? "#bbf7d0" : product.status === "DRAFT" ? "#fde68a" : "#d1d5db"}`,
+                            }}>
+                              {product.status.charAt(0) + product.status.slice(1).toLowerCase()}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       {isSelected && <span style={{ color: "#2563eb", fontWeight: 800, fontSize: "13px", flexShrink: 0 }}>✓</span>}
                     </button>
