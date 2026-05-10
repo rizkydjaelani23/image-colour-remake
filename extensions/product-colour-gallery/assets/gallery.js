@@ -132,6 +132,71 @@
       setTimeout(() => { tapping = false; }, 400);
     }
 
+    // ── Main product image swap ───────────────────────────────────────────
+    // Used when showColourPreview is false — swaps the page's main product
+    // image to the colour preview rather than rendering an inline panel.
+    var _mainImgEl         = null;
+    var _mainImgOrigSrc    = null;
+    var _mainImgOrigSrcset = null;
+
+    function findMainProductImage() {
+      // Try common Shopify theme selectors in order of specificity.
+      // Covers Dawn (default), Debut, Brooklyn, Narrative and most paid themes.
+      var selectors = [
+        ".product__media-item--first img",   // Dawn — featured/first slide
+        ".product__media-item img",           // Dawn — any slide
+        ".product__media img",               // Dawn wrapper fallback
+        "#ProductPhotoImg",                  // Debut
+        "[data-product-featured-image]",     // Debut / Brooklyn attr
+        ".product-featured-media img",       // Narrative
+        ".product-single__photo img",        // Brooklyn
+        ".product-image img",               // generic
+      ];
+      for (var i = 0; i < selectors.length; i++) {
+        var el = document.querySelector(selectors[i]);
+        if (el && el.tagName === "IMG") return el;
+      }
+      return null;
+    }
+
+    function swapMainImage(url, isDeselect) {
+      if (!_mainImgEl) _mainImgEl = findMainProductImage();
+      var img = _mainImgEl;
+      if (!img) return; // theme uses an unrecognised structure — fail silently
+
+      if (isDeselect || !url) {
+        if (_mainImgOrigSrc === null) return; // nothing saved yet, nothing to restore
+        img.style.transition = "opacity 0.3s ease";
+        img.style.opacity    = "0";
+        setTimeout(function () {
+          img.src = _mainImgOrigSrc;
+          if (_mainImgOrigSrcset !== null) img.srcset = _mainImgOrigSrcset;
+          else img.removeAttribute("srcset");
+          img.style.opacity  = "1";
+          // Reset so we re-query on the next selection (DOM may have changed)
+          _mainImgOrigSrc    = null;
+          _mainImgOrigSrcset = null;
+          _mainImgEl         = null;
+        }, 300);
+        return;
+      }
+
+      // Save originals on the very first swap so we can restore them later
+      if (_mainImgOrigSrc === null) {
+        _mainImgOrigSrc    = img.src;
+        _mainImgOrigSrcset = img.getAttribute("srcset") || null;
+      }
+
+      // Crossfade into the colour preview image
+      img.style.transition = "opacity 0.3s ease";
+      img.style.opacity    = "0";
+      setTimeout(function () {
+        img.src = shopifyImgUrl(url, 800);
+        img.removeAttribute("srcset"); // prevent srcset from overriding our src
+        img.style.opacity = "1";
+      }, 300);
+    }
+
     // ── colour preview panel (shown inside the gallery, no main image swap) ─
     // Works the same on desktop and mobile — CSS controls the size/layout.
     function applyCardSelection(match, isDeselect) {
@@ -147,10 +212,14 @@
 
       if (isDeselect || !match) {
         if (existing) existing.remove();
+        if (!showColourPreview) swapMainImage(null, true); // restore original main image
         return;
       }
 
-      if (!showColourPreview) return; // merchant disabled the preview panel
+      if (!showColourPreview) {
+        swapMainImage(match.imageUrl, false); // swap main image instead of inline panel
+        return;
+      }
 
       if (existing) {
         // Update in-place — no DOM recreation
