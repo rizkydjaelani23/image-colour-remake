@@ -221,8 +221,8 @@ async function buildRealisticComposite(params: {
           { input: textureLight, blend: "soft-light" },
         ])
         .modulate({
-          brightness: renderMode === "smooth-colour" ? 0.90 : 0.99,
-          saturation: renderMode === "smooth-colour" ? 1.02 : 1.20,
+          brightness: renderMode === "smooth-colour" ? 0.85 : 0.99,  // was 0.90
+          saturation: renderMode === "smooth-colour" ? 1.0  : 1.20,  // was 1.02
         })
         .gamma(1.01)
         .png()
@@ -258,16 +258,16 @@ async function buildRealisticComposite(params: {
     const idx = i * 4;
 
     const maskValue = maskRaw.data[i] / 255;
-    const alphaBase = renderMode === "smooth-colour" ? 0.82 : blendStrength;
+    const alphaBase = renderMode === "smooth-colour" ? 0.78 : blendStrength;  // was 0.82
     const alpha = Math.max(0, Math.min(1, maskValue * alphaBase));
 
     const br = baseRaw.data[idx];
     const bg = baseRaw.data[idx + 1];
     const bb = baseRaw.data[idx + 2];
 
-    const fr = fabricRaw.data[idx];
-    const fg = fabricRaw.data[idx + 1];
-    const fb = fabricRaw.data[idx + 2];
+    let fr = fabricRaw.data[idx];
+    let fg = fabricRaw.data[idx + 1];
+    let fb = fabricRaw.data[idx + 2];
 
     // Keep original image fully untouched outside mask
     if (maskValue < 0.01) {
@@ -278,9 +278,24 @@ async function buildRealisticComposite(params: {
       continue;
     }
 
+    // ── Per-pixel luminosity cap ──────────────────────────────────────────
+    // If the generated fabric colour is significantly brighter than the source
+    // pixel, scale it back down to match. This stops bright product images from
+    // making the output colour look washed out / over-saturated.
+    // The cap is tighter for smooth-colour (plush/velvet) fabrics.
+    const sourceLum    = 0.299 * br  + 0.587 * bg  + 0.114 * bb;
+    const fabricLumRaw = 0.299 * fr  + 0.587 * fg  + 0.114 * fb;
+    const lumCap = renderMode === "smooth-colour" ? 1.04 : 1.14;
+    if (fabricLumRaw > 10 && fabricLumRaw > sourceLum * lumCap) {
+      const lumScale = (sourceLum * lumCap) / fabricLumRaw;
+      fr = Math.min(255, Math.round(fr * lumScale));
+      fg = Math.min(255, Math.round(fg * lumScale));
+      fb = Math.min(255, Math.round(fb * lumScale));
+    }
+
     // Neutralise only inside the fabric area
-        const lum = Math.round(0.299 * br + 0.587 * bg + 0.114 * bb);
-        const neutralMix = renderMode === "smooth-colour" ? 0.0 : 0.65 * maskValue;
+    const lum = Math.round(0.299 * br + 0.587 * bg + 0.114 * bb);
+    const neutralMix = renderMode === "smooth-colour" ? 0.0 : 0.65 * maskValue;
 
     const nr = Math.round(br * (1 - neutralMix) + lum * neutralMix);
     const ng = Math.round(bg * (1 - neutralMix) + lum * neutralMix);
@@ -321,8 +336,8 @@ async function createSmoothColourLayer(
     })
     .blur(14)
     .modulate({
-      brightness: 0.98,
-      saturation: 1.18,
+      brightness: 0.94,   // was 0.98 — pull down before compositing
+      saturation: 1.0,    // was 1.18 — no saturation pump; swatch colour as-is
     })
     .png()
     .toBuffer();
