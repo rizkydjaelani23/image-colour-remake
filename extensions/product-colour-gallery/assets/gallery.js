@@ -60,8 +60,11 @@
     const disclaimer         = root.dataset.disclaimer       || "";
     const showDisclaimer     = root.dataset.showDisclaimer   === "true";
     const openByDefault      = root.dataset.openByDefault    === "true";
-    // Default true — only false when merchant explicitly sets it to false in theme editor
-    const showColourPreview  = root.dataset.showColourPreview !== "false";
+    // true only when the attribute is explicitly "true" (checkbox checked).
+    // Liquid outputs "" for false booleans, not "false", so !== "false" always
+    // evaluated to true. Use === "true" to match the same pattern as the other
+    // checkbox settings (showDisclaimer, openByDefault).
+    const showColourPreview  = root.dataset.showColourPreview === "true";
 
     if (!numericProductId || !shop) { root.innerHTML = ""; return; }
 
