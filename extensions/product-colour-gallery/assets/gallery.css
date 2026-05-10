@@ -153,9 +153,51 @@
 
 .pcg-card img {
   width: 100%;
+  aspect-ratio: 1 / 1;
   display: block;
   border-radius: 10px;
   margin-bottom: 8px;
+  object-fit: cover;
+  /* Skeleton shimmer while lazy-loading */
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: pcg-shimmer 1.4s infinite;
+  transition: opacity 0.2s ease;
+}
+
+/* Once src is set the shimmer stops naturally and image fades in */
+.pcg-card img[src=""] {
+  opacity: 0;
+}
+
+@keyframes pcg-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── Loading skeleton ── */
+.pcg-skeleton-row {
+  height: 32px;
+  border-radius: 999px;
+  width: 140px;
+  margin-bottom: 14px;
+  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: pcg-shimmer 1.4s infinite;
+}
+
+.pcg-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.pcg-skeleton-card {
+  border-radius: 14px;
+  aspect-ratio: 1 / 1;
+  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: pcg-shimmer 1.4s infinite;
 }
 
 .pcg-card-title {
@@ -175,9 +217,50 @@
   font-size: 13px;
 }
 
-/* ── Mobile selected preview (shown inside gallery so user doesn't scroll up) ── */
-.pcg-mobile-preview {
-  display: none;
+/* ── Colour preview panel (desktop + mobile, shown inside the gallery) ── */
+.pcg-colour-preview {
+  margin-bottom: 14px;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 2px solid #111827;
+  animation: pcg-fade-in 0.2s ease;
+}
+
+.pcg-colour-preview img {
+  width: 100%;
+  display: block;
+  max-height: 340px;   /* a bit taller on desktop */
+  object-fit: cover;
+}
+
+.pcg-preview-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #111827;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.pcg-preview-label .pcg-check {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #22c55e;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+@keyframes pcg-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 @media (max-width: 749px) {
@@ -203,46 +286,8 @@
     overflow-x: visible;
   }
 
-  /* Show inline selected preview so user doesn't have to scroll up */
-  .pcg-mobile-preview {
-    display: block;
-    margin-bottom: 14px;
-    border-radius: 14px;
-    overflow: hidden;
-    border: 2px solid #111827;
-    animation: pcg-fade-in 0.2s ease;
-  }
-
-  .pcg-mobile-preview img {
-    width: 100%;
-    display: block;
-    max-height: 260px;
-    object-fit: cover;
-  }
-
-  .pcg-mobile-preview-label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
-    background: #111827;
-    color: #ffffff;
-    font-size: 14px;
-    font-weight: 700;
-  }
-
-  .pcg-mobile-preview-label .pcg-check {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background: #22c55e;
-    color: #fff;
-    font-size: 11px;
-    font-weight: 800;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
+  .pcg-colour-preview img {
+    max-height: 260px;  /* slightly smaller on mobile */
   }
 
   /* Make cards slightly larger and easier to tap */
@@ -253,10 +298,5 @@
   .pcg-card-title {
     font-size: 11px;
     margin-top: 4px;
-  }
-
-  @keyframes pcg-fade-in {
-    from { opacity: 0; transform: translateY(4px); }
-    to   { opacity: 1; transform: translateY(0); }
   }
 }

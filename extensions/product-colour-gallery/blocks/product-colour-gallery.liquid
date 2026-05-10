@@ -8,6 +8,7 @@
   data-disclaimer="{{ block.settings.disclaimer_text | escape }}"
   data-show-disclaimer="{{ block.settings.show_disclaimer }}"
   data-open-by-default="{{ block.settings.open_by_default }}"
+  data-show-colour-preview="{{ block.settings.show_colour_preview }}"
   {{ block.shopify_attributes }}
 ></div>
 
@@ -53,6 +54,17 @@
       "id": "open_by_default",
       "label": "Open by default",
       "default": false
+    },
+    {
+      "type": "header",
+      "content": "Colour preview"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_colour_preview",
+      "label": "Show colour preview image when selected",
+      "info": "When enabled, clicking a colour swatch shows a larger preview image inside the gallery. Turn off if your theme already displays colours beside the main image.",
+      "default": true
     }
   ]
 }

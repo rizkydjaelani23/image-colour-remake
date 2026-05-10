@@ -5,47 +5,94 @@ export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const url = new URL(request.url);
     const shopDomain = url.searchParams.get("shop");
-    const productId = url.searchParams.get("productId");
+    const productId  = url.searchParams.get("productId");
 
-    if (!shopDomain) {
-      return Response.json({ error: "Missing shop" }, { status: 400 });
-    }
+    if (!shopDomain) return Response.json({ error: "Missing shop" }, { status: 400 });
+    if (!productId)  return Response.json({ error: "Missing productId" }, { status: 400 });
 
-    if (!productId) {
-      return Response.json({ error: "Missing productId" }, { status: 400 });
-    }
-
-    const shop = await prisma.shop.findFirst({
-      where: {
-        shopDomain,
-      },
-    });
-
-    if (!shop) {
-      return Response.json({
-        success: true,
-        product: null,
-        previews: [],
-      });
-    }
-
+    // ── Single JOIN query instead of 3 sequential round-trips ──────────────
+    // Prisma compiles the relation filter into one SQL JOIN.
     const product = await prisma.product.findFirst({
       where: {
-        shopId: shop.id,
         shopifyProductId: productId,
+        shop: { shopDomain },
+      },
+      select: {
+        id:                true,
+        shopId:            true,
+        shopifyProductId:  true,
+        title:             true,
+        handle:            true,
+        imageUrl:          true,
+        showOnStorefront:  true,
       },
     });
 
+    // Cache headers — safe for CDN + browser since gallery data changes infrequently.
+    // stale-while-revalidate means the customer never waits for a fresh fetch.
+    const cacheHeaders = {
+      "Cache-Control": "public, max-age=120, stale-while-revalidate=300",
+      "Content-Type":  "application/json",
+    };
+
     if (!product) {
-      return Response.json({
-        success: true,
-        product: null,
-        previews: [],
+      return new Response(JSON.stringify({ success: true, product: null, previews: [] }), {
+        status: 200,
+        headers: cacheHeaders,
       });
     }
 
     if (!product.showOnStorefront) {
-      return Response.json({
+      return new Response(
+        JSON.stringify({
+          success:  true,
+          product:  {
+            id: product.id,
+            shopifyProductId: product.shopifyProductId,
+            title: product.title,
+            handle: product.handle,
+            imageUrl: product.imageUrl,
+          },
+          previews: [],
+        }),
+        { status: 200, headers: cacheHeaders }
+      );
+    }
+
+    // ── Previews query (still needs product.id, so unavoidably a second query) ──
+    const rawPreviews = await prisma.preview.findMany({
+      where: {
+        shopId:               product.shopId,
+        productId:            product.id,
+        approvedForStorefront: true,
+        NOT: { status: "HIDDEN" },
+      },
+      select: {
+        id:                  true,
+        colourName:          true,
+        customerDisplayName: true,
+        imageUrl:            true,
+        fabricFamily:        true,
+        featured:            true,
+      },
+      orderBy: [
+        { featured:     "desc" },
+        { fabricFamily: "asc"  },
+        { colourName:   "asc"  },
+      ],
+    });
+
+    // Use customerDisplayName as the colourName if set
+    const previews = rawPreviews.map((p) => ({
+      id:           p.id,
+      colourName:   p.customerDisplayName || p.colourName,
+      imageUrl:     p.imageUrl,
+      fabricFamily: p.fabricFamily,
+      featured:     p.featured,
+    }));
+
+    return new Response(
+      JSON.stringify({
         success: true,
         product: {
           id: product.id,
@@ -54,52 +101,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
           handle: product.handle,
           imageUrl: product.imageUrl,
         },
-        previews: [],
-      });
-    }
+        previews,
+      }),
+      { status: 200, headers: cacheHeaders }
+    );
 
-    const previews = await prisma.preview.findMany({
-      where: {
-        shopId: shop.id,
-        productId: product.id,
-        approvedForStorefront: true,
-        NOT: {
-          status: "HIDDEN",
-        },
-      },
-      orderBy: [
-        { featured: "desc" },
-        { fabricFamily: "asc" },
-        { colourName: "asc" },
-      ],
-    });
-
-    return Response.json({
-      success: true,
-      product: {
-        id: product.id,
-        shopifyProductId: product.shopifyProductId,
-        title: product.title,
-        handle: product.handle,
-        imageUrl: product.imageUrl,
-      },
-      // Use customerDisplayName as the colourName if set — gallery.js reads colourName
-      previews: previews.map((p) => ({
-        ...p,
-        colourName: p.customerDisplayName || p.colourName,
-      })),
-    });
   } catch (error) {
     console.error("api.storefront-previews loader error:", error);
-
     return Response.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown error loading storefront previews",
-      },
-      { status: 500 },
+      { error: error instanceof Error ? error.message : "Unknown error loading storefront previews" },
+      { status: 500 }
     );
   }
 }

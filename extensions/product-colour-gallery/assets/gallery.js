@@ -1,313 +1,308 @@
 (function () {
+
+  // ── Lazy / eager image loader ─────────────────────────────────────────────
+  function lazyLoadImages(container, eagerCount) {
+    eagerCount = eagerCount || 4;
+    const imgs = Array.from(container.querySelectorAll("img.pcg-lazy"));
+    if (!imgs.length) return;
+
+    imgs.forEach((img, i) => {
+      if (i < eagerCount) {
+        const src = img.dataset.src;
+        if (src) { img.src = src; img.removeAttribute("data-src"); }
+        return;
+      }
+      if ("IntersectionObserver" in window) {
+        const observer = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (!entry.isIntersecting) return;
+              const el = entry.target;
+              const src = el.dataset.src;
+              if (src) { el.src = src; el.removeAttribute("data-src"); }
+              observer.unobserve(el);
+            });
+          },
+          { rootMargin: "80px" }
+        );
+        observer.observe(img);
+      } else {
+        setTimeout(() => {
+          const src = img.dataset.src;
+          if (src) { img.src = src; img.removeAttribute("data-src"); }
+        }, (i - eagerCount) * 60);
+      }
+    });
+  }
+
+  // ── Main gallery init ─────────────────────────────────────────────────────
   async function initColourGallery(root) {
     const numericProductId = root.dataset.productId;
-    const shop = root.dataset.shop;
-    const heading = root.dataset.heading || "See this bed in other colours";
-    const subtext =
-      root.dataset.subtext || "Browse approved colour options for this product.";
-    const collapsedLabel = root.dataset.collapsedLabel || "See more colours";
-    const disclaimer = root.dataset.disclaimer || "";
-    const showDisclaimer = root.dataset.showDisclaimer === "true";
-    const openByDefault = root.dataset.openByDefault === "true";
+    const shop             = root.dataset.shop;
+    const heading            = root.dataset.heading          || "See this bed in other colours";
+    const subtext            = root.dataset.subtext          || "Browse approved colour options for this product.";
+    const collapsedLabel     = root.dataset.collapsedLabel   || "See more colours";
+    const disclaimer         = root.dataset.disclaimer       || "";
+    const showDisclaimer     = root.dataset.showDisclaimer   === "true";
+    const openByDefault      = root.dataset.openByDefault    === "true";
+    // Default true — only false when merchant explicitly sets it to false in theme editor
+    const showColourPreview  = root.dataset.showColourPreview !== "false";
 
-    if (!numericProductId || !shop) {
+    if (!numericProductId || !shop) { root.innerHTML = ""; return; }
+
+    const gidProductId = `gid://shopify/Product/${numericProductId}`;
+
+    // Show skeleton immediately so space isn't blank while loading
+    if (openByDefault) {
+      root.innerHTML = `
+        <div class="pcg-shell">
+          <div class="pcg-toggle">
+            <div class="pcg-toggle-copy">
+              <span class="pcg-toggle-title">${escapeHtml(collapsedLabel)}</span>
+              <span class="pcg-toggle-subtitle">${escapeHtml(subtext)}</span>
+            </div>
+            <span class="pcg-toggle-icon">−</span>
+          </div>
+          <div class="pcg-content">
+            <div class="pcg-skeleton-row"></div>
+            <div class="pcg-skeleton-grid">
+              ${Array(4).fill('<div class="pcg-skeleton-card"></div>').join("")}
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // ── Fetch with sessionStorage cache ──────────────────────────────────
+    // On first visit: fetch from API and cache the result.
+    // On back-navigation or re-render in the same session: instant load from cache.
+    let data;
+    const cacheKey = `pcg:${shop}:${numericProductId}`;
+    try {
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {
+        data = JSON.parse(cached);
+      } else {
+        const response = await fetch(
+          `/apps/colour-gallery?shop=${encodeURIComponent(shop)}&productId=${encodeURIComponent(gidProductId)}`
+        );
+        const rawText = await response.text();
+        try { data = rawText ? JSON.parse(rawText) : null; }
+        catch { throw new Error(`Non-JSON response: ${rawText || "empty"}`); }
+        if (!response.ok) throw new Error((data && data.error) || "Failed to load previews");
+        if (!data) throw new Error("Empty response from storefront previews API");
+        // Cache for this session
+        try { sessionStorage.setItem(cacheKey, JSON.stringify(data)); } catch (_) {}
+      }
+    } catch (error) {
+      console.error("Product colour gallery error:", error);
       root.innerHTML = "";
       return;
     }
 
-    const gidProductId = `gid://shopify/Product/${numericProductId}`;
+    const previews = Array.isArray(data.previews) ? data.previews : [];
+    if (!previews.length) { root.innerHTML = ""; return; }
 
-    try {
-      const response = await fetch(
-        `/apps/colour-gallery?shop=${encodeURIComponent(shop)}&productId=${encodeURIComponent(gidProductId)}`
-      );
+    const grouped = previews.reduce((acc, item) => {
+      const family = item.fabricFamily || "General";
+      if (!acc[family]) acc[family] = [];
+      acc[family].push(item);
+      return acc;
+    }, {});
 
-      const rawText = await response.text();
+    const familyNames   = Object.keys(grouped);
+    let activeFamily    = familyNames[0];
+    let selectedPreview = null;
+    let isExpanded      = openByDefault;
 
-      let data;
-      try {
-        data = rawText ? JSON.parse(rawText) : null;
-      } catch {
-        throw new Error(`Non-JSON response received: ${rawText || "empty response"}`);
-      }
+    // ── tap debounce ──────────────────────────────────────────────────────
+    let tapping = false;
+    function debounce(fn) {
+      if (tapping) return;
+      tapping = true;
+      fn();
+      setTimeout(() => { tapping = false; }, 400);
+    }
 
-      if (!response.ok) {
-        throw new Error((data && data.error) || "Failed to load previews");
-      }
+    // ── colour preview panel (shown inside the gallery, no main image swap) ─
+    // Works the same on desktop and mobile — CSS controls the size/layout.
+    function applyCardSelection(match, isDeselect) {
+      // Toggle active class on card buttons
+      root.querySelectorAll(".pcg-card").forEach((btn) => {
+        btn.classList.toggle(
+          "is-active",
+          !isDeselect && !!match && btn.dataset.previewId === match.id
+        );
+      });
 
-      if (!data) {
-        throw new Error("Empty response received from storefront previews API");
-      }
+      const existing = root.querySelector("#pcg-colour-preview");
 
-      const previews = Array.isArray(data.previews) ? data.previews : [];
-
-      if (!previews.length) {
-        root.innerHTML = "";
+      if (isDeselect || !match) {
+        if (existing) existing.remove();
         return;
       }
 
-      const grouped = previews.reduce((acc, item) => {
-        const family = item.fabricFamily || "General";
-        if (!acc[family]) acc[family] = [];
-        acc[family].push(item);
-        return acc;
-      }, {});
+      if (!showColourPreview) return; // merchant disabled the preview panel
 
-      const familyNames = Object.keys(grouped);
-      let activeFamily = familyNames[0];
-      let selectedPreview = null;
-      let isExpanded = openByDefault;
-
-      let originalMainMediaState = null;
-
-      function getMainProductImage() {
-        const selectors = [
-          ".splide__slide.is-active img",
-          ".swiper-slide-active img",
-          ".product__media-wrapper .is-active img",
-          ".product__media-item.is-active img",
-          ".product__media img",
-          '[data-media-id] img'
-        ];
-
-        for (const selector of selectors) {
-          const images = Array.from(document.querySelectorAll(selector));
-
-          const visibleImage = images.find((img) => {
-            if (!(img instanceof HTMLImageElement)) return false;
-            const rect = img.getBoundingClientRect();
-            const style = window.getComputedStyle(img);
-
-            return (
-              rect.width > 40 &&
-              rect.height > 40 &&
-              style.display !== "none" &&
-              style.visibility !== "hidden"
-            );
-          });
-
-          if (visibleImage) return visibleImage;
-        }
-
-        return null;
+      if (existing) {
+        // Update in-place — no DOM recreation
+        const img = existing.querySelector("img");
+        if (img) { img.src = match.imageUrl; img.alt = escapeHtml(match.colourName); }
+        const label = existing.querySelector(".pcg-preview-label");
+        if (label) label.innerHTML = `<span class="pcg-check">✓</span> ${escapeHtml(match.colourName)}`;
+      } else {
+        // Create once
+        const panel = document.createElement("div");
+        panel.className = "pcg-colour-preview";
+        panel.id = "pcg-colour-preview";
+        panel.innerHTML = `
+          <img src="${escapeAttr(match.imageUrl)}"
+               alt="${escapeHtml(match.colourName)}"
+               decoding="async" />
+          <div class="pcg-preview-label">
+            <span class="pcg-check">✓</span>${escapeHtml(match.colourName)}
+          </div>`;
+        // Insert above the grid
+        const layout = root.querySelector(".pcg-gallery-layout");
+        if (layout) layout.parentNode.insertBefore(panel, layout);
       }
 
-      function captureOriginalMainMedia() {
-        const img = getMainProductImage();
-        if (!img || originalMainMediaState) return;
+      // Scroll into view so customers see the result without hunting for it
+      const panel = root.querySelector("#pcg-colour-preview");
+      if (panel) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
 
-        originalMainMediaState = {
-          src: img.getAttribute("src") || "",
-          srcset: img.getAttribute("srcset") || "",
-          sizes: img.getAttribute("sizes") || "",
-          alt: img.getAttribute("alt") || ""
-        };
-      }
+    // ── full render (open/close and family change only) ───────────────────
+    function render() {
+      const currentItems   = grouped[activeFamily] || [];
+      const previousGrid   = root.querySelector(".pcg-side-grid");
+      const previousScroll = previousGrid ? previousGrid.scrollTop : 0;
 
-      function restoreOriginalMainProductMedia() {
-        const img = getMainProductImage();
-        if (!img || !originalMainMediaState) return;
+      root.innerHTML = `
+        <div class="pcg-shell">
+          <button
+            type="button"
+            class="pcg-toggle ${isExpanded ? "is-open" : ""}"
+            aria-expanded="${isExpanded}"
+          >
+            <div class="pcg-toggle-copy">
+              <span class="pcg-toggle-title">${escapeHtml(collapsedLabel)}</span>
+              <span class="pcg-toggle-subtitle">${escapeHtml(subtext)}</span>
+            </div>
+            <span class="pcg-toggle-icon">${isExpanded ? "−" : "+"}</span>
+          </button>
 
-        img.src = originalMainMediaState.src || "";
-
-        if (originalMainMediaState.srcset) {
-          img.setAttribute("srcset", originalMainMediaState.srcset);
-        } else {
-          img.removeAttribute("srcset");
-        }
-
-        if (originalMainMediaState.sizes) {
-          img.setAttribute("sizes", originalMainMediaState.sizes);
-        } else {
-          img.removeAttribute("sizes");
-        }
-
-        if (originalMainMediaState.alt) {
-          img.alt = originalMainMediaState.alt;
-        }
-      }
-
-      function swapMainProductMedia(preview) {
-        if (!preview || !preview.imageUrl) return;
-
-        const img = getMainProductImage();
-        if (!img) return;
-
-        captureOriginalMainMedia();
-
-        img.src = preview.imageUrl;
-        // Keep srcset/sizes so responsive image loading still works on mobile.
-        // We update srcset to point to the same preview URL rather than removing it.
-        if (img.hasAttribute("srcset")) {
-          img.srcset = preview.imageUrl;
-        }
-        if (img.hasAttribute("sizes")) {
-          img.sizes = "100vw";
-        }
-
-        if (preview.colourName) {
-          img.alt = preview.colourName;
-        }
-      }
-
-      function render() {
-        const currentItems = grouped[activeFamily] || [];
-        const previousGrid = root.querySelector(".pcg-side-grid");
-        const previousScrollTop = previousGrid ? previousGrid.scrollTop : 0;
-
-        root.innerHTML = `
-          <div class="pcg-shell">
-            <button
-              type="button"
-              class="pcg-toggle ${isExpanded ? "is-open" : ""}"
-              aria-expanded="${isExpanded ? "true" : "false"}"
-            >
-              <div class="pcg-toggle-copy">
-                <span class="pcg-toggle-title">${escapeHtml(collapsedLabel)}</span>
-                <span class="pcg-toggle-subtitle">${escapeHtml(subtext)}</span>
+          ${isExpanded ? `
+            <div class="pcg-content">
+              <div class="pcg-header">
+                <h3 class="pcg-heading">${escapeHtml(heading)}</h3>
+                ${showDisclaimer && disclaimer
+                  ? `<p class="pcg-disclaimer">${escapeHtml(disclaimer)}</p>`
+                  : ""}
               </div>
-              <span class="pcg-toggle-icon">${isExpanded ? "−" : "+"}</span>
-            </button>
 
-            ${
-              isExpanded
-                ? `
-              <div class="pcg-content">
-                <div class="pcg-header">
-                  <h3 class="pcg-heading">${escapeHtml(heading)}</h3>
-                  ${showDisclaimer && disclaimer ? `<p class="pcg-disclaimer">${escapeHtml(disclaimer)}</p>` : ""}
-                </div>
+              <div class="pcg-families">
+                ${familyNames.map((f) => `
+                  <button type="button"
+                    class="pcg-family-button ${f === activeFamily ? "is-active" : ""}"
+                    data-family="${escapeAttr(f)}"
+                  >${escapeHtml(f)}</button>
+                `).join("")}
+              </div>
 
-                <div class="pcg-families">
-                  ${familyNames
-                    .map(
-                      (family) => `
-                        <button
-                          type="button"
-                          class="pcg-family-button ${family === activeFamily ? "is-active" : ""}"
-                          data-family="${escapeAttr(family)}"
-                        >
-                          ${escapeHtml(family)}
-                        </button>
-                      `
-                    )
-                    .join("")}
-                </div>
-
-                ${selectedPreview ? `
-                  <div class="pcg-mobile-preview" id="pcg-mobile-preview">
-                    <img src="${selectedPreview.imageUrl}" alt="${escapeHtml(selectedPreview.colourName)}" />
-                    <div class="pcg-mobile-preview-label">
-                      <span class="pcg-check">✓</span>
-                      ${escapeHtml(selectedPreview.colourName)}
-                    </div>
+              ${selectedPreview && showColourPreview ? `
+                <div class="pcg-colour-preview" id="pcg-colour-preview">
+                  <img src="${escapeAttr(selectedPreview.imageUrl)}"
+                       alt="${escapeHtml(selectedPreview.colourName)}"
+                       decoding="async" />
+                  <div class="pcg-preview-label">
+                    <span class="pcg-check">✓</span>${escapeHtml(selectedPreview.colourName)}
                   </div>
-                ` : ""}
+                </div>
+              ` : ""}
 
-                <div class="pcg-gallery-layout">
-                  <div class="pcg-side-column">
-                    <div class="pcg-side-grid">
-                      ${currentItems
-                        .map(
-                          (item) => `
-                            <button
-                              type="button"
-                              class="pcg-card ${selectedPreview && item.id === selectedPreview.id ? "is-active" : ""}"
-                              data-preview-id="${escapeAttr(item.id)}"
-                            >
-                              <img src="${item.imageUrl}" alt="${escapeHtml(item.colourName)}" />
-                              <div class="pcg-card-title">${escapeHtml(item.colourName)}</div>
-                            </button>
-                          `
-                        )
-                        .join("")}
-                    </div>
+              <div class="pcg-gallery-layout">
+                <div class="pcg-side-column">
+                  <div class="pcg-side-grid">
+                    ${currentItems.map((item) => `
+                      <button type="button"
+                        class="pcg-card ${selectedPreview && item.id === selectedPreview.id ? "is-active" : ""}"
+                        data-preview-id="${escapeAttr(item.id)}"
+                      >
+                        <img
+                          class="pcg-lazy"
+                          src=""
+                          data-src="${escapeAttr(item.imageUrl)}"
+                          alt="${escapeHtml(item.colourName)}"
+                          decoding="async"
+                          width="120"
+                          height="120"
+                        />
+                        <div class="pcg-card-title">${escapeHtml(item.colourName)}</div>
+                      </button>
+                    `).join("")}
                   </div>
                 </div>
               </div>
-            `
-                : ""
-            }
-          </div>
-        `;
+            </div>
+          ` : ""}
+        </div>`;
 
-        const toggleButton = root.querySelector(".pcg-toggle");
-        if (toggleButton) {
-          toggleButton.addEventListener("click", () => {
-            isExpanded = !isExpanded;
+      const toggleBtn = root.querySelector(".pcg-toggle");
+      if (toggleBtn) {
+        toggleBtn.addEventListener("click", () => {
+          isExpanded = !isExpanded;
+          render();
+        });
+      }
+
+      if (isExpanded) {
+        lazyLoadImages(root, 4);
+
+        root.querySelectorAll(".pcg-family-button").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            activeFamily = btn.dataset.family;
+            selectedPreview = null;
             render();
           });
-        }
+        });
 
-        if (isExpanded) {
-          root.querySelectorAll(".pcg-family-button").forEach((button) => {
-            button.addEventListener("click", () => {
-              activeFamily = button.dataset.family;
-              selectedPreview = null;
-              render();
-              restoreOriginalMainProductMedia();
-            });
-          });
-
-          root.querySelectorAll(".pcg-card").forEach((button) => {
-            button.addEventListener("click", () => {
-              const previewId = button.dataset.previewId;
-              const match = currentItems.find((item) => item.id === previewId);
+        const items = grouped[activeFamily] || [];
+        root.querySelectorAll(".pcg-card").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            debounce(() => {
+              const match = items.find((item) => item.id === btn.dataset.previewId);
               if (!match) return;
 
               if (selectedPreview && selectedPreview.id === match.id) {
                 selectedPreview = null;
-                render();
-                restoreOriginalMainProductMedia();
+                applyCardSelection(null, true);
                 return;
               }
 
               selectedPreview = match;
-              render();
-              swapMainProductMedia(match);
-
-              // On mobile, scroll the in-gallery preview into view
-              // so the customer sees the result without scrolling up
-              if (window.innerWidth <= 749) {
-                const mobilePreview = root.querySelector("#pcg-mobile-preview");
-                if (mobilePreview) {
-                  mobilePreview.scrollIntoView({ behavior: "smooth", block: "nearest" });
-                }
-              }
+              applyCardSelection(match, false);
             });
           });
+        });
 
-          const newGrid = root.querySelector(".pcg-side-grid");
-          if (newGrid) {
-            newGrid.scrollTop = previousScrollTop;
-          }
-        }
+        const newGrid = root.querySelector(".pcg-side-grid");
+        if (newGrid) newGrid.scrollTop = previousScroll;
       }
-
-      captureOriginalMainMedia();
-      render();
-    } catch (error) {
-      console.error("Product colour gallery error:", error);
-      root.innerHTML = "";
     }
+
+    render();
   }
 
   function escapeHtml(value) {
     return String(value)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
+      .replaceAll("&", "&amp;").replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;").replaceAll('"', "&quot;")
       .replaceAll("'", "&#39;");
   }
-
-  function escapeAttr(value) {
-    return escapeHtml(value);
-  }
+  function escapeAttr(value) { return escapeHtml(value); }
 
   document.addEventListener("DOMContentLoaded", () => {
-    setTimeout(() => {
-      document.querySelectorAll(".pcg-root").forEach(initColourGallery);
-    }, 250);
+    document.querySelectorAll(".pcg-root").forEach(initColourGallery);
   });
+
 })();
