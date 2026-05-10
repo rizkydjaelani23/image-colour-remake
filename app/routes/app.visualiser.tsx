@@ -1,12 +1,24 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
+import prisma from "../utils/db.server";
+import { getOrCreateShop } from "../utils/shop.server";
 import type { CSSProperties } from "react";
+
+type ProductStatus = "ACTIVE" | "DRAFT" | "ARCHIVED";
+
+type ShopifyProductSummary = {
+  id: string;
+  title: string;
+  status: ProductStatus;
+  image: string | null;
+};
 
 type LoaderData = {
   apiKey: string;
+  allProducts: ShopifyProductSummary[];
+  previewManagerIds: string[];
 };
 
 type ProductVariant = {
@@ -45,16 +57,83 @@ type ListZonesResponse = {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
+  const shop = await getOrCreateShop(session.shop);
+
+  // Fetch all Shopify products for the custom picker (title, status, image)
+  let allProducts: ShopifyProductSummary[] = [];
+  try {
+    const res = await admin.graphql(`
+      query {
+        products(first: 250, sortKey: TITLE) {
+          edges {
+            node {
+              id
+              title
+              status
+              featuredImage { url }
+            }
+          }
+        }
+      }
+    `);
+    const json = await res.json() as {
+      data?: { products?: { edges?: Array<{ node: { id: string; title: string; status: string; featuredImage: { url: string } | null } }> } }
+    };
+    allProducts = (json.data?.products?.edges ?? []).map((e) => ({
+      id: e.node.id,
+      title: e.node.title,
+      status: e.node.status as ProductStatus,
+      image: e.node.featuredImage?.url ?? null,
+    }));
+  } catch (e) {
+    console.error("Failed to fetch products for picker:", e);
+  }
+
+  // Which products already have previews in the preview manager?
+  const inManager = await prisma.product.findMany({
+    where: { shopId: shop.id, previews: { some: {} } },
+    select: { shopifyProductId: true },
+  });
+  const previewManagerIds = inManager.map((p) => p.shopifyProductId);
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "",
-  };
+    allProducts,
+    previewManagerIds,
+  } satisfies LoaderData;
 }
 
 export default function VisualiserPage() {
-  useLoaderData<typeof loader>();
-  const shopify = useAppBridge();
+  const { allProducts, previewManagerIds } = useLoaderData<typeof loader>();
+
+  // ── Custom product picker state ───────────────────────────────────────────
+  const [showProductPicker, setShowProductPicker] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState("");
+  const [pickerStatusFilter, setPickerStatusFilter] = useState<"ALL" | ProductStatus>("ALL");
+
+  const previewManagerSet = useMemo(() => new Set(previewManagerIds), [previewManagerIds]);
+
+  const filteredPickerProducts = useMemo(() => {
+    return allProducts.filter((p) => {
+      if (pickerStatusFilter !== "ALL" && p.status !== pickerStatusFilter) return false;
+      if (pickerSearch.trim()) {
+        const q = pickerSearch.trim().toLowerCase();
+        if (!p.title.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [allProducts, pickerSearch, pickerStatusFilter]);
+
+  const pickerStatusCounts = useMemo(() => {
+    const counts = { ALL: allProducts.length, ACTIVE: 0, DRAFT: 0, ARCHIVED: 0 };
+    for (const p of allProducts) {
+      if (p.status === "ACTIVE") counts.ACTIVE++;
+      else if (p.status === "DRAFT") counts.DRAFT++;
+      else if (p.status === "ARCHIVED") counts.ARCHIVED++;
+    }
+    return counts;
+  }, [allProducts]);
 
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [product, setProduct] = useState<SelectedProduct | null>(null);
@@ -119,48 +198,38 @@ export default function VisualiserPage() {
   const edgeWidthRef = useRef(0);
   const edgeHeightRef = useRef(0);
 
-  async function openProductPicker() {
-    setError(null);
+  function openProductPicker() {
+    setPickerSearch("");
+    setPickerStatusFilter("ALL");
+    setShowProductPicker(true);
+  }
 
-    try {
-      const selection = await shopify.resourcePicker({
-        type: "product",
-        action: "select",
-        multiple: false,
-        filter: { variants: false },
-      });
-
-      if (!selection || selection.length === 0) return;
-
-      const pickedProduct = selection[0];
-      setSelectedProductId(pickedProduct.id);
-      setMaskLocked(false);
-      setZones([]);
-      setActiveZoneId(null);
-      setGeneratedPreviewUrl(null);
-      setPreviewError(null);
-      setMaskError(null);
-      setFabricName("");
-      setSwatchFile(null);
-      setSwatchUrl(null);
-      setSwatchSource(null);
-      setZoom(1);
-      setPan({ x: 0, y: 0 });
-      setBulkPreviewResults([]);
-      setBulkPreviewError(null);
-      setBulkSwatchFiles([]);
-      setSelectedRecentSwatchIds([]);
-      setGenerationNotice(null);
-      setCurrentBatch(0);
-      setTotalBatches(0);
-      setGeneratedCount(0);
-      setBulkUploadMode("files");
-      setFolderSwatchJobs([]);
-      setImageLoaded(false);
-    } catch (err) {
-      console.error("Product picker error:", err);
-      setError("Could not open the product picker.");
-    }
+  function selectProductFromPicker(productId: string) {
+    setShowProductPicker(false);
+    setSelectedProductId(productId);
+    setMaskLocked(false);
+    setZones([]);
+    setActiveZoneId(null);
+    setGeneratedPreviewUrl(null);
+    setPreviewError(null);
+    setMaskError(null);
+    setFabricName("");
+    setSwatchFile(null);
+    setSwatchUrl(null);
+    setSwatchSource(null);
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+    setBulkPreviewResults([]);
+    setBulkPreviewError(null);
+    setBulkSwatchFiles([]);
+    setSelectedRecentSwatchIds([]);
+    setGenerationNotice(null);
+    setCurrentBatch(0);
+    setTotalBatches(0);
+    setGeneratedCount(0);
+    setBulkUploadMode("files");
+    setFolderSwatchJobs([]);
+    setImageLoaded(false);
   }
 
   async function loadZones(productId: string): Promise<Zone[]> {
@@ -1257,13 +1326,145 @@ const stepTextStyle: CSSProperties = {
             onClick={openProductPicker}
             style={primaryButtonStyle}
           >
-            Select product
+            {product ? "Change product" : "Select product"}
           </button>
 
           {product && (
             <p style={{ marginTop: "10px", fontSize: "13px", color: "#666" }}>
-              Selected product: <strong>{product.title}</strong>
+              Selected: <strong>{product.title}</strong>
+              {previewManagerSet.has(product.id) && (
+                <span style={{ marginLeft: "8px", background: "#ede9fe", color: "#6d28d9", fontSize: "11px", fontWeight: 600, padding: "2px 7px", borderRadius: "999px" }}>
+                  in preview manager
+                </span>
+              )}
             </p>
+          )}
+
+          {/* ── Custom product picker panel ─────────────────────────────── */}
+          {showProductPicker && (
+            <>
+              {/* backdrop */}
+              <div
+                onClick={() => setShowProductPicker(false)}
+                style={{ position: "fixed", inset: 0, zIndex: 999 }}
+              />
+              <div style={{
+                position: "relative", zIndex: 1000,
+                marginTop: "12px",
+                background: "#fff",
+                border: "1px solid #d1d5db",
+                borderRadius: "14px",
+                boxShadow: "0 8px 32px rgba(0,0,0,0.12)",
+                overflow: "hidden",
+                maxWidth: "560px",
+              }}>
+                {/* search */}
+                <div style={{ padding: "12px 14px", borderBottom: "1px solid #f0f0f0" }}>
+                  <input
+                    autoFocus
+                    type="text"
+                    placeholder="Search products…"
+                    value={pickerSearch}
+                    onChange={(e) => setPickerSearch(e.target.value)}
+                    style={{
+                      width: "100%", boxSizing: "border-box",
+                      padding: "8px 12px", borderRadius: "8px",
+                      border: "1px solid #d1d5db", fontSize: "13px",
+                      outline: "none",
+                    }}
+                  />
+                </div>
+
+                {/* status filter pills */}
+                <div style={{ display: "flex", gap: "6px", padding: "10px 14px", borderBottom: "1px solid #f0f0f0", flexWrap: "wrap" }}>
+                  {(["ALL", "ACTIVE", "DRAFT", "ARCHIVED"] as const).map((s) => {
+                    const labels: Record<string, string> = { ALL: "All", ACTIVE: "Active", DRAFT: "Draft", ARCHIVED: "Archived" };
+                    const colours: Record<string, { bg: string; text: string; border: string }> = {
+                      ALL:      { bg: pickerStatusFilter === "ALL"      ? "#1a1a1a" : "#f3f4f6", text: pickerStatusFilter === "ALL"      ? "#fff" : "#374151", border: pickerStatusFilter === "ALL"      ? "#1a1a1a" : "#e5e7eb" },
+                      ACTIVE:   { bg: pickerStatusFilter === "ACTIVE"   ? "#166534" : "#f0fdf4", text: pickerStatusFilter === "ACTIVE"   ? "#fff" : "#166534", border: pickerStatusFilter === "ACTIVE"   ? "#166534" : "#bbf7d0" },
+                      DRAFT:    { bg: pickerStatusFilter === "DRAFT"    ? "#92400e" : "#fffbeb", text: pickerStatusFilter === "DRAFT"    ? "#fff" : "#92400e", border: pickerStatusFilter === "DRAFT"    ? "#92400e" : "#fde68a" },
+                      ARCHIVED: { bg: pickerStatusFilter === "ARCHIVED" ? "#374151" : "#f9fafb", text: pickerStatusFilter === "ARCHIVED" ? "#fff" : "#6b7280", border: pickerStatusFilter === "ARCHIVED" ? "#374151" : "#e5e7eb" },
+                    };
+                    const c = colours[s];
+                    return (
+                      <button key={s} type="button"
+                        onClick={() => setPickerStatusFilter(s)}
+                        style={{ padding: "4px 10px", borderRadius: "999px", fontSize: "12px", fontWeight: 600, cursor: "pointer", background: c.bg, color: c.text, border: `1px solid ${c.border}` }}>
+                        {labels[s]} {pickerStatusCounts[s] > 0 ? `(${pickerStatusCounts[s]})` : ""}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* product list */}
+                <div style={{ maxHeight: "340px", overflowY: "auto" }}>
+                  {filteredPickerProducts.length === 0 ? (
+                    <p style={{ padding: "20px", textAlign: "center", color: "#9ca3af", fontSize: "13px" }}>No products found</p>
+                  ) : (
+                    filteredPickerProducts.map((p) => {
+                      const inManager = previewManagerSet.has(p.id);
+                      const statusColour: Record<ProductStatus, { bg: string; text: string }> = {
+                        ACTIVE:   { bg: "#dcfce7", text: "#166534" },
+                        DRAFT:    { bg: "#fef9c3", text: "#854d0e" },
+                        ARCHIVED: { bg: "#f3f4f6", text: "#6b7280" },
+                      };
+                      const sc = statusColour[p.status] ?? { bg: "#f3f4f6", text: "#6b7280" };
+                      const isSelected = product?.id === p.id;
+                      return (
+                        <button key={p.id} type="button"
+                          onClick={() => selectProductFromPicker(p.id)}
+                          style={{
+                            display: "flex", alignItems: "center", gap: "12px",
+                            width: "100%", padding: "10px 14px", textAlign: "left",
+                            background: isSelected ? "#f0f4ff" : "transparent",
+                            border: "none", borderBottom: "1px solid #f3f4f6",
+                            cursor: "pointer",
+                          }}
+                          onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = "#f9fafb"; }}
+                          onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                        >
+                          {p.image ? (
+                            <img src={p.image} alt="" width={40} height={40}
+                              style={{ borderRadius: "6px", objectFit: "cover", flexShrink: 0, border: "1px solid #e5e7eb" }} />
+                          ) : (
+                            <div style={{ width: 40, height: 40, borderRadius: "6px", background: "#f3f4f6", flexShrink: 0 }} />
+                          )}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: "13px", fontWeight: 500, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                              {p.title}
+                            </div>
+                            <div style={{ display: "flex", gap: "6px", marginTop: "3px", flexWrap: "wrap" }}>
+                              <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "999px", background: sc.bg, color: sc.text }}>
+                                {p.status.charAt(0) + p.status.slice(1).toLowerCase()}
+                              </span>
+                              {inManager && (
+                                <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "999px", background: "#ede9fe", color: "#6d28d9" }}>
+                                  in preview manager
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {isSelected && (
+                            <span style={{ color: "#4f46e5", fontWeight: 700, fontSize: "16px", flexShrink: 0 }}>✓</span>
+                          )}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* footer */}
+                <div style={{ padding: "10px 14px", borderTop: "1px solid #f0f0f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "12px", color: "#9ca3af" }}>
+                    {filteredPickerProducts.length} product{filteredPickerProducts.length !== 1 ? "s" : ""}
+                  </span>
+                  <button type="button" onClick={() => setShowProductPicker(false)}
+                    style={{ fontSize: "12px", color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: "4px 8px" }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </>
           )}
 
           <div
