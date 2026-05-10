@@ -110,6 +110,7 @@ export default function VisualiserPage() {
     colourName: string;
     fabricFamily: string;
   }>>([]);
+  const [imageLoaded, setImageLoaded] = useState(false);
 
   const imageRef = useRef<HTMLImageElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -154,6 +155,7 @@ export default function VisualiserPage() {
       setGeneratedCount(0);
       setBulkUploadMode("files");
       setFolderSwatchJobs([]);
+      setImageLoaded(false);
     } catch (err) {
       console.error("Product picker error:", err);
       setError("Could not open the product picker.");
@@ -276,6 +278,14 @@ export default function VisualiserPage() {
       redrawOutlinePreview();
     }
   }, [outlinePoints, tool]);
+
+  // Draw the saved zone mask onto the canvas once the product image is loaded
+  // AND the zones have been fetched — whichever arrives last.
+  useEffect(() => {
+    if (!imageLoaded || !activeZoneId || zones.length === 0) return;
+    const zone = zones.find((z) => z.id === activeZoneId);
+    if (zone) loadZoneMaskOntoCanvas(zone);
+  }, [imageLoaded, activeZoneId, zones]);
 
   function getBatchInfo(totalItems: number, batchSize = 10) {
     const totalBatches = Math.ceil(totalItems / batchSize);
@@ -1398,6 +1408,7 @@ const stepTextStyle: CSSProperties = {
                           setPan({ x: 0, y: 0 });
                           resizeCanvasToImage();
                           generateEdgeMap();
+                          setImageLoaded(true);
                         }}
                         style={{
                           maxWidth: "100%",
