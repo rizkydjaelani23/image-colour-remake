@@ -28,10 +28,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
       },
     });
 
-    // Cache headers — safe for CDN + browser since gallery data changes infrequently.
-    // stale-while-revalidate means the customer never waits for a fresh fetch.
+    // Cache headers:
+    // max-age=10        → serve fresh from cache for 10 seconds
+    // stale-while-revalidate=50 → after 10s, still serve cached instantly
+    //                             BUT refresh in the background simultaneously.
+    // Net effect: customers never wait, merchant changes show up within ~10-20s.
     const cacheHeaders = {
-      "Cache-Control": "public, max-age=120, stale-while-revalidate=300",
+      "Cache-Control": "public, max-age=10, stale-while-revalidate=50",
       "Content-Type":  "application/json",
     };
 
