@@ -134,106 +134,73 @@
 
     // ── Main product image swap ───────────────────────────────────────────
     // Used when showColourPreview is false.
-    //
-    // WHY OVERLAY instead of modifying the existing <img>:
-    // Modern Shopify themes (Dawn etc.) use <picture><source srcset="...">
-    // which the browser always prefers over <img src>. Theme JS also resets
-    // src/srcset when it detects external changes. So instead we inject our
-    // own <img> element as an absolutely-positioned overlay on top of the
-    // product image area — we never touch the original DOM at all.
-    var _overlayEl = null;
+    // Restored to the original working approach: find the VISIBLE product
+    // image using getBoundingClientRect(), save its src/srcset/sizes, then
+    // directly set img.src. Simple and reliable across all themes.
+    var _originalMainMedia = null;
 
-    function findProductImageArea() {
-      // Returns the container element that wraps the main product image.
-      // Ordered from most-specific to most-generic.
-      var candidates = [
-        // Dawn v10+ (Shopify default) — featured media container
-        ".product__media-item--first .product-media-container",
-        ".product__media-item--first",
-        // Dawn — active slide if featured slide isn't found
-        ".product__media-item.slider__slide--active",
-        ".product__media-item",
-        // Debut
-        ".product__photo-container",
-        "#ProductPhotoContain",
-        // Brooklyn / Narrative
-        ".product-single__photo-wrapper",
-        ".product__featured-media",
-        // Refresh, Sense, Craft (modern free themes)
-        ".product-media-container",
-        ".media-gallery__item:first-child",
-        // Generic
-        ".product__media",
-        ".product-image",
-        "[data-product-media-type-image]",
+    function getMainProductImage() {
+      var selectors = [
+        ".splide__slide.is-active img",
+        ".swiper-slide-active img",
+        ".product__media-wrapper .is-active img",
+        ".product__media-item.is-active img",
+        ".product__media img",
+        "[data-media-id] img",
       ];
-      for (var i = 0; i < candidates.length; i++) {
-        var el = document.querySelector(candidates[i]);
-        if (el) return el;
+      for (var i = 0; i < selectors.length; i++) {
+        var images = Array.from(document.querySelectorAll(selectors[i]));
+        var visible = images.find(function (img) {
+          if (!(img instanceof HTMLImageElement)) return false;
+          var rect  = img.getBoundingClientRect();
+          var style = window.getComputedStyle(img);
+          return (
+            rect.width  > 40 &&
+            rect.height > 40 &&
+            style.display     !== "none" &&
+            style.visibility  !== "hidden"
+          );
+        });
+        if (visible) return visible;
       }
-      // Absolute last resort: find the first Shopify CDN image in <main> and
-      // use its parent element as the container.
-      var cdnImgs = document.querySelectorAll(
-        "main img[srcset*='cdn.shopify'], main img[src*='cdn.shopify']"
-      );
-      if (cdnImgs.length) return cdnImgs[0].parentElement;
       return null;
+    }
+
+    function captureOriginalMainMedia() {
+      if (_originalMainMedia) return; // already saved
+      var img = getMainProductImage();
+      if (!img) return;
+      _originalMainMedia = {
+        src:    img.getAttribute("src")    || "",
+        srcset: img.getAttribute("srcset") || "",
+        sizes:  img.getAttribute("sizes")  || "",
+        alt:    img.getAttribute("alt")    || "",
+      };
     }
 
     function swapMainImage(url, isDeselect) {
       if (isDeselect || !url) {
-        if (!_overlayEl) return;
-        var leaving = _overlayEl;
-        _overlayEl = null;
-        leaving.style.opacity = "0";
-        setTimeout(function () {
-          if (leaving.parentNode) leaving.parentNode.removeChild(leaving);
-        }, 380);
+        if (!_originalMainMedia) return;
+        var img = getMainProductImage();
+        if (img) {
+          img.src = _originalMainMedia.src;
+          if (_originalMainMedia.srcset) img.setAttribute("srcset", _originalMainMedia.srcset);
+          else img.removeAttribute("srcset");
+          if (_originalMainMedia.sizes)  img.setAttribute("sizes",  _originalMainMedia.sizes);
+          else img.removeAttribute("sizes");
+          img.alt = _originalMainMedia.alt;
+        }
+        _originalMainMedia = null;
         return;
       }
 
-      // If we already have an overlay, just crossfade to the new image
-      if (_overlayEl) {
-        var current = _overlayEl;
-        current.style.opacity = "0";
-        setTimeout(function () {
-          current.src = shopifyImgUrl(url, 800);
-          current.style.opacity = "1";
-        }, 200);
-        return;
-      }
+      captureOriginalMainMedia();
+      var img = getMainProductImage();
+      if (!img) return;
 
-      var area = findProductImageArea();
-      if (!area) return; // unknown theme structure — fail silently
-
-      // The container must be relatively positioned so our absolute child works
-      if (window.getComputedStyle(area).position === "static") {
-        area.style.position = "relative";
-      }
-
-      var overlay = document.createElement("img");
-      overlay.setAttribute("id", "pcg-main-img-overlay");
-      overlay.setAttribute("alt", "");
-      overlay.setAttribute("decoding", "async");
-      // Cover the entire area; pointer-events off so clicks still reach theme UI
-      overlay.style.cssText =
-        "position:absolute;top:0;left:0;width:100%;height:100%;" +
-        "object-fit:cover;z-index:9;opacity:0;" +
-        "transition:opacity 0.35s ease;pointer-events:none;";
-
-      function show() { overlay.style.opacity = "1"; }
-      overlay.addEventListener("load", show);
-      overlay.onerror = function () {
-        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-        if (_overlayEl === overlay) _overlayEl = null;
-      };
-      overlay.src = shopifyImgUrl(url, 800);
-
-      area.appendChild(overlay);
-      _overlayEl = overlay;
-
-      // Trigger fade-in even when image was already cached (load won't fire)
-      requestAnimationFrame(function () { requestAnimationFrame(show); });
+      img.src = shopifyImgUrl(url, 800);
+      img.removeAttribute("srcset");
+      img.removeAttribute("sizes");
     }
 
     // ── colour preview panel (shown inside the gallery, no main image swap) ─
@@ -410,6 +377,10 @@
         if (newGrid) newGrid.scrollTop = previousScroll;
       }
     }
+
+    // Capture the current main product image before first render so we can
+    // restore it when the customer deselects a colour (original approach).
+    if (!showColourPreview) captureOriginalMainMedia();
 
     render();
   }
