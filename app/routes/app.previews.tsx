@@ -153,8 +153,10 @@ export default function PreviewManagerPage() {
   const { productsWithPreviews } = useLoaderData<typeof loader>();
 
   const [productId, setProductId] = useState("");
+  const [productSearch, setProductSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [storefrontSaving, setStorefrontSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previews, setPreviews] = useState<PreviewItem[]>([]);
@@ -375,6 +377,39 @@ export default function PreviewManagerPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [previews, draftFamilies, manualCategories]);
 
+  const filteredProducts = useMemo(() => {
+    const q = productSearch.toLowerCase().trim();
+    if (!q) return productsWithPreviews;
+    return productsWithPreviews.filter((p) =>
+      (p.title || "Untitled product").toLowerCase().includes(q)
+    );
+  }, [productsWithPreviews, productSearch]);
+
+  const selectedProductSummary = useMemo(
+    () => productsWithPreviews.find((p) => p.shopifyProductId === productId) ?? null,
+    [productsWithPreviews, productId]
+  );
+
+  async function deletePreview(previewId: string) {
+    if (!window.confirm("Remove this colour? This cannot be undone.")) return;
+    setDeletingId(previewId);
+    try {
+      const response = await fetch("/api/preview-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ previewId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to delete preview");
+      setPreviews((prev) => prev.filter((p) => p.id !== previewId));
+      setSelectedIds((prev) => prev.filter((id) => id !== previewId));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete preview");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   const grouped = useMemo(() => {
     const groups: Record<string, PreviewItem[]> = {};
     for (const preview of previews) {
@@ -424,34 +459,67 @@ export default function PreviewManagerPage() {
         {productsWithPreviews.length === 0 ? (
           <p style={{ margin: 0, color: "#64748b", fontSize: "14px" }}>No previews generated yet. Go to the Visualiser to create your first preview.</p>
         ) : (
-          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-            {productsWithPreviews.map((product) => {
-              const isSelected = productId === product.shopifyProductId;
-              return (
-                <button
-                  key={product.id}
-                  type="button"
-                  onClick={async () => {
-                    setProductId(product.shopifyProductId);
-                    await loadPreviews(product.shopifyProductId);
-                  }}
-                  style={{
-                    display: "flex", alignItems: "center", gap: "10px", padding: "8px 12px",
-                    borderRadius: "12px", border: isSelected ? "2px solid #111827" : "1px solid #e5e7eb",
-                    background: isSelected ? "#111827" : "#ffffff", color: isSelected ? "#ffffff" : "#111827",
-                    cursor: "pointer", font: "inherit", fontWeight: isSelected ? 700 : 500, textAlign: "left",
-                  }}
-                >
-                  {product.imageUrl && (
-                    <img src={product.imageUrl} alt="" style={{ width: "36px", height: "36px", borderRadius: "6px", objectFit: "cover", border: isSelected ? "1px solid rgba(255,255,255,0.2)" : "1px solid #e5e7eb", flexShrink: 0 }} />
-                  )}
-                  <div>
-                    <div style={{ fontSize: "13px", lineHeight: 1.3 }}>{product.title || "Untitled product"}</div>
-                    <div style={{ fontSize: "11px", opacity: isSelected ? 0.7 : 0.5, marginTop: "2px" }}>{product.previewCount} preview{product.previewCount !== 1 ? "s" : ""}</div>
-                  </div>
-                </button>
-              );
-            })}
+          <div>
+            {/* Selected product chip */}
+            {selectedProductSummary && (
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px", borderRadius: "12px", background: "#111827", color: "#fff", marginBottom: "12px" }}>
+                {selectedProductSummary.imageUrl && (
+                  <img src={selectedProductSummary.imageUrl} alt="" style={{ width: "34px", height: "34px", borderRadius: "6px", objectFit: "cover", flexShrink: 0, border: "1px solid rgba(255,255,255,0.15)" }} />
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: "13px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{selectedProductSummary.title || "Untitled product"}</div>
+                  <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "1px" }}>{selectedProductSummary.previewCount} preview{selectedProductSummary.previewCount !== 1 ? "s" : ""}</div>
+                </div>
+                <button type="button" onClick={() => { setProductId(""); setProductSearch(""); setPreviews([]); setLoadedProduct(null); setSelectedIds([]); }} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: "20px", lineHeight: 1, padding: "0 2px", flexShrink: 0 }} title="Clear selection">×</button>
+              </div>
+            )}
+
+            {/* Search */}
+            <input
+              type="search"
+              placeholder={`Search ${productsWithPreviews.length} products…`}
+              value={productSearch}
+              onChange={(e) => setProductSearch(e.target.value)}
+              style={{ ...inputStyle, marginBottom: "8px" }}
+            />
+
+            {/* Scrollable product list */}
+            <div style={{ maxHeight: "240px", overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: "12px", background: "#fff" }}>
+              {filteredProducts.length === 0 ? (
+                <div style={{ padding: "12px 14px", fontSize: "13px", color: "#94a3b8" }}>No products match &ldquo;{productSearch}&rdquo;</div>
+              ) : (
+                filteredProducts.map((product, idx) => {
+                  const isSelected = productId === product.shopifyProductId;
+                  return (
+                    <button
+                      key={product.id}
+                      type="button"
+                      onClick={async () => {
+                        setProductId(product.shopifyProductId);
+                        setProductSearch("");
+                        await loadPreviews(product.shopifyProductId);
+                      }}
+                      style={{
+                        width: "100%", display: "flex", alignItems: "center", gap: "10px",
+                        padding: "10px 12px", border: "none",
+                        borderBottom: idx < filteredProducts.length - 1 ? "1px solid #f1f5f9" : "none",
+                        background: isSelected ? "#f0f9ff" : "#fff",
+                        cursor: "pointer", textAlign: "left", font: "inherit",
+                      }}
+                    >
+                      {product.imageUrl && (
+                        <img src={product.imageUrl} alt="" style={{ width: "32px", height: "32px", borderRadius: "6px", objectFit: "cover", flexShrink: 0, border: "1px solid #e5e7eb" }} />
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: "13px", fontWeight: isSelected ? 700 : 500, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{product.title || "Untitled product"}</div>
+                        <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "1px" }}>{product.previewCount} preview{product.previewCount !== 1 ? "s" : ""}</div>
+                      </div>
+                      {isSelected && <span style={{ color: "#2563eb", fontWeight: 800, fontSize: "13px", flexShrink: 0 }}>✓</span>}
+                    </button>
+                  );
+                })
+              )}
+            </div>
           </div>
         )}
 
@@ -745,6 +813,23 @@ export default function PreviewManagerPage() {
                         {isRegenerating ? "…" : "↺ Regenerate"}
                       </button>
                     </div>
+
+                    {/* Remove colour */}
+                    <button
+                      type="button"
+                      disabled={deletingId === preview.id}
+                      onClick={() => deletePreview(preview.id)}
+                      style={{
+                        marginTop: "8px", width: "100%",
+                        padding: "8px 10px", borderRadius: "10px",
+                        border: "1px solid #fecaca", background: "#fff",
+                        color: "#dc2626", cursor: "pointer",
+                        font: "inherit", fontSize: "13px", fontWeight: 700,
+                        opacity: deletingId === preview.id ? 0.6 : 1,
+                      }}
+                    >
+                      {deletingId === preview.id ? "Removing…" : "✕ Remove colour"}
+                    </button>
                   </div>
                 );
               })}

@@ -127,6 +127,7 @@ export default function VisualiserPage() {
         type: "product",
         action: "select",
         multiple: false,
+        showVariants: false,
       });
 
       if (!selection || selection.length === 0) return;
