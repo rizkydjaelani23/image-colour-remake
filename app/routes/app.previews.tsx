@@ -14,6 +14,8 @@ type ProductSummary = {
   title: string | null;
   imageUrl: string | null;
   previewCount: number;
+  approvedCount: number;
+  showOnStorefront: boolean;
   status: ProductStatus | null;
 };
 
@@ -51,12 +53,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const products = await prisma.product.findMany({
     where: { shopId: shop.id, previews: { some: {} } },
     orderBy: { title: "asc" },
-    select: {
-      id: true,
-      shopifyProductId: true,
-      title: true,
-      imageUrl: true,
+    include: {
       _count: { select: { previews: true } },
+      previews: {
+        where: { approvedForStorefront: true },
+        select: { id: true },
+      },
     },
   });
 
@@ -92,6 +94,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       title: p.title,
       imageUrl: p.imageUrl,
       previewCount: p._count.previews,
+      approvedCount: p.previews.length,
+      showOnStorefront: p.showOnStorefront,
       status: statusMap[p.shopifyProductId] ?? null,
     })),
   } satisfies LoaderData;
@@ -208,6 +212,7 @@ export default function PreviewManagerPage() {
   const [sortPreviews, setSortPreviews] = useState<"featured-first" | "az" | "za">("featured-first");
   const [sortProducts, setSortProducts] = useState<"az" | "za" | "most" | "least">("az");
   const [filterProductStatus, setFilterProductStatus] = useState<"all" | ProductStatus>("all");
+  const [filterStorefrontReady, setFilterStorefrontReady] = useState(false);
 
   async function loadPreviews(forcedProductId?: string) {
     const idToUse = (forcedProductId || productId).trim();
@@ -422,9 +427,10 @@ export default function PreviewManagerPage() {
     return productsWithPreviews.filter((p) => {
       if (q && !(p.title || "Untitled product").toLowerCase().includes(q)) return false;
       if (filterProductStatus !== "all" && p.status !== filterProductStatus) return false;
+      if (filterStorefrontReady && !(p.showOnStorefront && p.approvedCount > 0)) return false;
       return true;
     });
-  }, [productsWithPreviews, productSearch, filterProductStatus]);
+  }, [productsWithPreviews, productSearch, filterProductStatus, filterStorefrontReady]);
 
   const sortedProducts = useMemo(() => {
     const arr = [...filteredProducts];
@@ -582,6 +588,25 @@ export default function PreviewManagerPage() {
                   </button>
                 );
               })}
+
+              {/* Storefront-ready filter */}
+              {(() => {
+                const count = productsWithPreviews.filter((p) => p.showOnStorefront && p.approvedCount > 0).length;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => setFilterStorefrontReady((v) => !v)}
+                    style={{
+                      padding: "5px 12px", borderRadius: "999px", font: "inherit", fontSize: "12px", fontWeight: 700, cursor: "pointer",
+                      border: filterStorefrontReady ? "1px solid #7c3aed" : "1px solid #ddd8fe",
+                      background: filterStorefrontReady ? "#7c3aed" : "#f5f3ff",
+                      color: filterStorefrontReady ? "#fff" : "#7c3aed",
+                    }}
+                  >
+                    ✅ Live on storefront ({count})
+                  </button>
+                );
+              })()}
             </div>
 
             {/* Scrollable product list */}
@@ -613,7 +638,7 @@ export default function PreviewManagerPage() {
                       )}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: "13px", fontWeight: isSelected ? 700 : 500, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{product.title || "Untitled product"}</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "2px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "2px", flexWrap: "wrap" }}>
                           <span style={{ fontSize: "11px", color: "#94a3b8" }}>{product.previewCount} preview{product.previewCount !== 1 ? "s" : ""}</span>
                           {product.status && (
                             <span style={{
@@ -623,6 +648,14 @@ export default function PreviewManagerPage() {
                               border: `1px solid ${product.status === "ACTIVE" ? "#bbf7d0" : product.status === "DRAFT" ? "#fde68a" : "#d1d5db"}`,
                             }}>
                               {product.status.charAt(0) + product.status.slice(1).toLowerCase()}
+                            </span>
+                          )}
+                          {product.showOnStorefront && product.approvedCount > 0 && (
+                            <span style={{
+                              fontSize: "10px", fontWeight: 700, padding: "1px 6px", borderRadius: "999px",
+                              background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd8fe",
+                            }}>
+                              ✅ {product.approvedCount} live
                             </span>
                           )}
                         </div>
