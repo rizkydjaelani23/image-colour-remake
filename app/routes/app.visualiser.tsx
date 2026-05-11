@@ -16,10 +16,23 @@ type ShopifyProductSummary = {
   rank: number; // best-selling position (1 = top seller)
 };
 
+type SavedMaskEntry = {
+  id: string;
+  name: string;
+  maskPath: string;
+  updatedAt: string;
+  product: {
+    shopifyProductId: string;
+    title: string | null;
+    imageUrl: string | null;
+  };
+};
+
 type LoaderData = {
   apiKey: string;
   allProducts: ShopifyProductSummary[];
   previewManagerIds: string[];
+  savedMasks: SavedMaskEntry[];
 };
 
 type ProductVariant = {
@@ -122,15 +135,38 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
   const previewManagerIds = inManager.map((p) => p.shopifyProductId);
 
+  // Saved masks library — all zones with a maskPath, most recently used first
+  const rawMasks = await prisma.zone.findMany({
+    where: { shopId: shop.id, maskPath: { not: null } },
+    include: {
+      product: { select: { shopifyProductId: true, title: true, imageUrl: true } },
+    },
+    orderBy: { updatedAt: "desc" },
+    take: 50,
+  });
+
+  const savedMasks: SavedMaskEntry[] = rawMasks.map((z) => ({
+    id: z.id,
+    name: z.name,
+    maskPath: z.maskPath as string,
+    updatedAt: z.updatedAt.toISOString(),
+    product: {
+      shopifyProductId: z.product.shopifyProductId,
+      title: z.product.title,
+      imageUrl: z.product.imageUrl,
+    },
+  }));
+
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "",
     allProducts,
     previewManagerIds,
+    savedMasks,
   } satisfies LoaderData;
 }
 
 export default function VisualiserPage() {
-  const { allProducts, previewManagerIds } = useLoaderData<typeof loader>();
+  const { allProducts, previewManagerIds, savedMasks } = useLoaderData<typeof loader>();
 
   // ── Custom product picker state ───────────────────────────────────────────
   const [showProductPicker, setShowProductPicker] = useState(false);
@@ -215,6 +251,9 @@ export default function VisualiserPage() {
     fabricFamily: string;
   }>>([]);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [showMaskLibrary, setShowMaskLibrary] = useState(false);
+  const [maskLibraryCopying, setMaskLibraryCopying] = useState(false);
+  const [maskLibrarySearch, setMaskLibrarySearch] = useState("");
 
   const imageRef = useRef<HTMLImageElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -313,6 +352,31 @@ export default function VisualiserPage() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     };
+  }
+
+  async function copyZoneMask(sourceZoneId: string, zoneName: string) {
+    if (!product || !selectedProductId) return;
+    setMaskLibraryCopying(true);
+    try {
+      const formData = new FormData();
+      formData.append("sourceZoneId", sourceZoneId);
+      formData.append("targetProductId", selectedProductId);
+      formData.append("targetProductTitle", product.title ?? "");
+      formData.append("targetImageUrl", product.featuredImage ?? "");
+      formData.append("zoneName", zoneName);
+
+      const response = await fetch("/api/copy-zone-mask", { method: "POST", body: formData });
+      const data = await response.json() as { success?: boolean; zone?: Zone; error?: string };
+      if (!response.ok) throw new Error(data.error || "Failed to copy mask");
+
+      await loadZones(product.id);
+      setShowMaskLibrary(false);
+      setMaskLibrarySearch("");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to copy mask");
+    } finally {
+      setMaskLibraryCopying(false);
+    }
   }
 
   useEffect(() => {
@@ -1496,6 +1560,154 @@ const stepTextStyle: CSSProperties = {
             </>
           )}
 
+          {/* ── Mask Library Modal ───────────────────────────────────────── */}
+          {showMaskLibrary && (
+            <>
+              {/* Backdrop */}
+              <div
+                onClick={() => setShowMaskLibrary(false)}
+                style={{ position: "fixed", inset: 0, zIndex: 999, background: "rgba(0,0,0,0.4)" }}
+              />
+              <div style={{
+                position: "fixed",
+                top: "50%", left: "50%",
+                transform: "translate(-50%, -50%)",
+                zIndex: 1000,
+                background: "#fff",
+                border: "1px solid #d1d5db",
+                borderRadius: "16px",
+                boxShadow: "0 12px 48px rgba(0,0,0,0.2)",
+                width: "min(640px, 95vw)",
+                maxHeight: "80vh",
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden",
+              }}>
+                {/* Header */}
+                <div style={{ padding: "16px 20px", borderBottom: "1px solid #f0f0f0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: "15px" }}>📋 Saved Mask Library</div>
+                    <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "2px" }}>
+                      Pick a mask from another product to reuse — ideal when products share the same photo setup.
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => setShowMaskLibrary(false)}
+                    style={{ background: "none", border: "none", fontSize: "18px", cursor: "pointer", color: "#9ca3af", padding: "4px" }}>
+                    ✕
+                  </button>
+                </div>
+
+                {/* Search */}
+                <div style={{ padding: "12px 20px", borderBottom: "1px solid #f0f0f0" }}>
+                  <input
+                    autoFocus
+                    type="text"
+                    placeholder="Search by product name or zone name…"
+                    value={maskLibrarySearch}
+                    onChange={(e) => setMaskLibrarySearch(e.target.value)}
+                    style={{
+                      width: "100%", boxSizing: "border-box",
+                      padding: "8px 12px", borderRadius: "8px",
+                      border: "1px solid #d1d5db", fontSize: "13px",
+                    }}
+                  />
+                </div>
+
+                {/* Mask list */}
+                <div style={{ overflowY: "auto", padding: "12px 20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                  {(() => {
+                    const q = maskLibrarySearch.trim().toLowerCase();
+                    const filtered = savedMasks.filter((m) => {
+                      // Hide masks from the currently selected product
+                      if (m.product.shopifyProductId === selectedProductId) return false;
+                      if (!q) return true;
+                      return (
+                        (m.product.title ?? "").toLowerCase().includes(q) ||
+                        m.name.toLowerCase().includes(q)
+                      );
+                    });
+
+                    if (filtered.length === 0) {
+                      return (
+                        <p style={{ color: "#9ca3af", textAlign: "center", padding: "24px 0", fontSize: "14px" }}>
+                          {savedMasks.filter(m => m.product.shopifyProductId !== selectedProductId).length === 0
+                            ? "No saved masks yet. Generate a preview for another product first."
+                            : "No masks match your search."}
+                        </p>
+                      );
+                    }
+
+                    return filtered.map((m) => (
+                      <div key={m.id} style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "12px",
+                        padding: "10px 12px",
+                        borderRadius: "10px",
+                        border: "1px solid #e5e7eb",
+                        background: "#fafafa",
+                      }}>
+                        {/* Mask thumbnail */}
+                        <div style={{ position: "relative", flexShrink: 0 }}>
+                          {m.product.imageUrl ? (
+                            <img
+                              src={m.product.imageUrl}
+                              alt={m.product.title ?? ""}
+                              style={{ width: "56px", height: "56px", objectFit: "cover", borderRadius: "8px", border: "1px solid #e5e7eb" }}
+                            />
+                          ) : (
+                            <div style={{ width: "56px", height: "56px", borderRadius: "8px", background: "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px" }}>🛏</div>
+                          )}
+                          <div style={{
+                            position: "absolute", inset: 0, borderRadius: "8px",
+                            background: "rgba(99,102,241,0.15)",
+                            border: "2px solid #6366f1",
+                            pointerEvents: "none",
+                          }} />
+                        </div>
+
+                        {/* Info */}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: "13px", color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {m.product.title ?? "Unknown product"}
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "2px" }}>
+                            Zone: {m.name} · {new Date(m.updatedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+                          </div>
+                        </div>
+
+                        {/* Use button */}
+                        <button
+                          type="button"
+                          disabled={maskLibraryCopying}
+                          onClick={() => copyZoneMask(m.id, m.name)}
+                          style={{
+                            padding: "8px 14px",
+                            borderRadius: "8px",
+                            border: "none",
+                            background: maskLibraryCopying ? "#e5e7eb" : "#4f46e5",
+                            color: maskLibraryCopying ? "#9ca3af" : "#fff",
+                            fontWeight: 600,
+                            fontSize: "12px",
+                            cursor: maskLibraryCopying ? "not-allowed" : "pointer",
+                            flexShrink: 0,
+                          }}
+                        >
+                          {maskLibraryCopying ? "Copying…" : "Use this"}
+                        </button>
+                      </div>
+                    ));
+                  })()}
+                </div>
+
+                {/* Footer */}
+                <div style={{ padding: "10px 20px", borderTop: "1px solid #f0f0f0", fontSize: "12px", color: "#9ca3af" }}>
+                  Only products with a different photo setup will need their own mask drawn from scratch.
+                </div>
+              </div>
+            </>
+          )}
+
           <div
             style={{
               background: "#f6f7f9",
@@ -1927,6 +2139,33 @@ const stepTextStyle: CSSProperties = {
                     style={{ width: "100%" }}
                   />
                 </div>
+
+                {/* ── Mask Library ────────────────────────────────── */}
+                {savedMasks.length > 0 && (
+                  <div style={{ marginBottom: "16px" }}>
+                    <button
+                      type="button"
+                      onClick={() => { setShowMaskLibrary(true); setMaskLibrarySearch(""); }}
+                      style={{
+                        width: "100%",
+                        padding: "10px 14px",
+                        borderRadius: "8px",
+                        border: "1px dashed #6366f1",
+                        background: "#f5f3ff",
+                        color: "#4f46e5",
+                        fontWeight: 600,
+                        fontSize: "13px",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        justifyContent: "center",
+                      }}
+                    >
+                      📋 Use Saved Mask ({savedMasks.filter(m => m.product.shopifyProductId !== selectedProductId).length} available)
+                    </button>
+                  </div>
+                )}
 
                 <div style={{ marginBottom: "16px" }}>
                   <p style={{ fontWeight: 600, marginBottom: "8px" }}>Saved zones</p>
