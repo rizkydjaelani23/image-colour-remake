@@ -17,6 +17,7 @@
     --pcg-accent: {{ block.settings.accent_color }};
     --pcg-card-bg: {{ block.settings.card_bg }};
     --pcg-text: {{ block.settings.text_color }};
+    --pcg-subtext: {{ block.settings.subtitle_color }};
   "
   {{ block.shopify_attributes }}
 ></div>
@@ -127,6 +128,13 @@
       "label": "Text colour",
       "info": "Applies to headings, card titles, and the toggle label.",
       "default": "#111827"
+    },
+    {
+      "type": "color",
+      "id": "subtitle_color",
+      "label": "Subtitle text colour",
+      "info": "Applies to the smaller description text beneath the toggle label.",
+      "default": "#6b7280"
     }
   ]
 }

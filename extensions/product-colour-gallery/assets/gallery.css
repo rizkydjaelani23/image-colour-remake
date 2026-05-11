@@ -35,8 +35,7 @@
 
 .pcg-toggle-subtitle {
   font-size: 13px;
-  color: var(--pcg-text, #6b7280);
-  opacity: 0.7;
+  color: var(--pcg-subtext, #6b7280);
   line-height: 1.5;
 }
 
