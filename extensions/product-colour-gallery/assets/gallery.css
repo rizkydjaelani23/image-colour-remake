@@ -149,6 +149,7 @@
 
 .pcg-card.is-active {
   border: 2px solid var(--pcg-accent, #111827);
+  background: var(--pcg-card-active-bg, #f0f4ff);
 }
 
 .pcg-card img {

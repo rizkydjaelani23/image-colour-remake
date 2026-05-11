@@ -16,6 +16,7 @@
     --pcg-box-radius: {{ block.settings.box_radius }}px;
     --pcg-accent: {{ block.settings.accent_color }};
     --pcg-card-bg: {{ block.settings.card_bg }};
+    --pcg-card-active-bg: {{ block.settings.card_active_bg }};
     --pcg-text: {{ block.settings.text_color }};
     --pcg-subtext: {{ block.settings.subtitle_color }};
   "
@@ -121,6 +122,13 @@
       "id": "card_bg",
       "label": "Colour card background",
       "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "card_active_bg",
+      "label": "Selected card background colour",
+      "info": "The background colour a colour card turns when clicked/selected.",
+      "default": "#f0f4ff"
     },
     {
       "type": "color",
