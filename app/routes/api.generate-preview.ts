@@ -290,12 +290,15 @@ async function buildRealisticComposite(params: {
     const fabricLumRaw = 0.299 * fr + 0.587 * fg + 0.114 * fb;
 
     // ── Adaptive alpha ────────────────────────────────────────────────────
-    // Dark fabric swatches (navy, charcoal, black) need higher opacity so a
-    // bright product base can't bleed through and lift them toward grey.
-    // Light swatches use standard alpha.
-    const isDarkFabric = fabricLumRaw < 85;
+    // Three tiers based on fabric luminosity:
+    //   Dark  (< 85):  0.93 — needs strong coverage so the base can't lift navy/charcoal
+    //   Bright(> 160): 0.80 — let more base show through so headboard lines and
+    //                         tufting details stay visible on vivid/bright colours
+    //   Medium(85-160):0.88 — balanced middle ground
+    const isDarkFabric   = fabricLumRaw < 85;
+    const isBrightFabric = fabricLumRaw > 160;
     const alphaBase = renderMode === "smooth-colour"
-      ? (isDarkFabric ? 0.93 : 0.90)
+      ? (isDarkFabric ? 0.93 : isBrightFabric ? 0.80 : 0.88)
       : blendStrength;
     const alpha = Math.max(0, Math.min(1, maskValue * alphaBase));
 
