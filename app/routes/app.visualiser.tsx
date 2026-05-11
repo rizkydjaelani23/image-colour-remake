@@ -62,19 +62,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const shop = await getOrCreateShop(session.shop);
 
   // Fetch ALL Shopify products for the custom picker using cursor pagination.
-  // Sorted by BEST_SELLING so we can assign a sales rank to each product.
-  // After fetching, we re-sort alphabetically by title so duplicate names
-  // sit next to each other in the UI — each still shows its sales rank badge.
+  // Shopify caps each request at 250 — we loop until hasNextPage is false.
   let allProducts: ShopifyProductSummary[] = [];
   try {
     let cursor: string | null = null;
     let hasNextPage = true;
-    let rank = 1;
 
     while (hasNextPage) {
       const res = await admin.graphql(
         `query ($cursor: String) {
-          products(first: 250, after: $cursor, sortKey: BEST_SELLING) {
+          products(first: 250, after: $cursor, sortKey: TITLE) {
             pageInfo { hasNextPage endCursor }
             edges {
               node {
@@ -107,17 +104,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
           title: e.node.title,
           status: e.node.status as ProductStatus,
           image: e.node.featuredImage?.url ?? null,
-          rank: rank++,
+          rank: 0, // unused — kept for type compatibility
         });
       }
 
       hasNextPage = page.pageInfo.hasNextPage;
       cursor = page.pageInfo.endCursor ?? null;
     }
-
-    // Re-sort alphabetically so duplicate names are adjacent in the picker.
-    // Each product keeps its original sales rank badge for differentiation.
-    allProducts.sort((a, b) => a.title.localeCompare(b.title));
   } catch (e) {
     console.error("Failed to fetch products for picker:", e);
   }
@@ -1469,23 +1462,10 @@ const stepTextStyle: CSSProperties = {
                               <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "999px", background: sc.bg, color: sc.text }}>
                                 {p.status.charAt(0) + p.status.slice(1).toLowerCase()}
                               </span>
-                              {/* Sales rank badge — gold for top 3, amber for top 10, grey otherwise */}
-                              {(() => {
-                                const r = p.rank;
-                                const style: Record<string, string> = r === 1
-                                  ? { background: "#fef9c3", color: "#854d0e", border: "1px solid #fde047" }
-                                  : r <= 3
-                                  ? { background: "#fff7ed", color: "#9a3412", border: "1px solid #fed7aa" }
-                                  : r <= 10
-                                  ? { background: "#f0fdf4", color: "#166534", border: "1px solid #bbf7d0" }
-                                  : { background: "#f9fafb", color: "#6b7280", border: "1px solid #e5e7eb" };
-                                const icon = r === 1 ? "🏆 " : r <= 3 ? "🥈 " : "";
-                                return (
-                                  <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "999px", ...style }}>
-                                    {icon}#{r} best seller
-                                  </span>
-                                );
-                              })()}
+                              {/* Product ID — lets merchants tell apart products with identical names */}
+                              <span style={{ fontSize: "11px", fontWeight: 500, padding: "1px 6px", borderRadius: "999px", background: "#f3f4f6", color: "#6b7280", border: "1px solid #e5e7eb", fontFamily: "monospace" }}>
+                                ID {p.id.replace("gid://shopify/Product/", "")}
+                              </span>
                               {inManager && (
                                 <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "999px", background: "#ede9fe", color: "#6d28d9" }}>
                                   in preview manager
