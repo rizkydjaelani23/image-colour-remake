@@ -290,18 +290,19 @@ async function buildRealisticComposite(params: {
     const fabricLumRaw = 0.299 * fr + 0.587 * fg + 0.114 * fb;
 
     // ── Adaptive alpha ────────────────────────────────────────────────────
-    // Four tiers based on fabric luminosity:
-    //   Black/near-black (< 25):  0.82 — back off enough so tufting/lines stay
-    //                                    visible; pure black has nothing to show
-    //                                    through without this relief
-    //   Dark  (25–84):   0.91 — strong coverage but slightly eased from before
-    //   Bright(> 160):   0.80 — let base show on vivid/bright colours
-    //   Medium(85–160):  0.88 — balanced middle ground
-    const isBlackFabric  = fabricLumRaw < 25;
-    const isDarkFabric   = fabricLumRaw >= 25 && fabricLumRaw < 85;
-    const isBrightFabric = fabricLumRaw > 160;
+    // Five tiers based on fabric luminosity:
+    //   Black/near-black (< 25):   0.82 — back off so tufting lines show on black
+    //   Dark  (25–84):             0.91 — strong coverage for navy/charcoal
+    //   Medium(85–160):            0.88 — balanced middle ground
+    //   Bright(160–210):           0.80 — let base shadow show on vivid colours
+    //   Near-white (> 210):        0.73 — cream/white washes out tufting shadows;
+    //                                     27% original shows through to keep lines visible
+    const isBlackFabric     = fabricLumRaw < 25;
+    const isDarkFabric      = fabricLumRaw >= 25 && fabricLumRaw < 85;
+    const isBrightFabric    = fabricLumRaw > 160 && fabricLumRaw <= 210;
+    const isNearWhiteFabric = fabricLumRaw > 210;
     const alphaBase = renderMode === "smooth-colour"
-      ? (isBlackFabric ? 0.82 : isDarkFabric ? 0.91 : isBrightFabric ? 0.80 : 0.88)
+      ? (isBlackFabric ? 0.82 : isDarkFabric ? 0.91 : isNearWhiteFabric ? 0.73 : isBrightFabric ? 0.80 : 0.88)
       : blendStrength;
     const alpha = Math.max(0, Math.min(1, maskValue * alphaBase));
 
