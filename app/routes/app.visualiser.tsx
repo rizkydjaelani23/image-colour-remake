@@ -60,32 +60,54 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
   const shop = await getOrCreateShop(session.shop);
 
-  // Fetch all Shopify products for the custom picker (title, status, image)
+  // Fetch ALL Shopify products for the custom picker using cursor pagination.
+  // Shopify caps each request at 250 — we loop until hasNextPage is false.
   let allProducts: ShopifyProductSummary[] = [];
   try {
-    const res = await admin.graphql(`
-      query {
-        products(first: 250, sortKey: TITLE) {
-          edges {
-            node {
-              id
-              title
-              status
-              featuredImage { url }
+    let cursor: string | null = null;
+    let hasNextPage = true;
+
+    while (hasNextPage) {
+      const res = await admin.graphql(
+        `query ($cursor: String) {
+          products(first: 250, after: $cursor, sortKey: TITLE) {
+            pageInfo { hasNextPage endCursor }
+            edges {
+              node {
+                id
+                title
+                status
+                featuredImage { url }
+              }
             }
           }
-        }
-      }
-    `);
-    const json = await res.json() as {
-      data?: { products?: { edges?: Array<{ node: { id: string; title: string; status: string; featuredImage: { url: string } | null } }> } }
-    };
-    allProducts = (json.data?.products?.edges ?? []).map((e) => ({
-      id: e.node.id,
-      title: e.node.title,
-      status: e.node.status as ProductStatus,
-      image: e.node.featuredImage?.url ?? null,
-    }));
+        }`,
+        { variables: { cursor } },
+      );
+
+      const json = await res.json() as {
+        data?: {
+          products?: {
+            pageInfo: { hasNextPage: boolean; endCursor: string | null };
+            edges?: Array<{ node: { id: string; title: string; status: string; featuredImage: { url: string } | null } }>;
+          };
+        };
+      };
+
+      const page = json.data?.products;
+      if (!page) break;
+
+      const batch = (page.edges ?? []).map((e) => ({
+        id: e.node.id,
+        title: e.node.title,
+        status: e.node.status as ProductStatus,
+        image: e.node.featuredImage?.url ?? null,
+      }));
+      allProducts = allProducts.concat(batch);
+
+      hasNextPage = page.pageInfo.hasNextPage;
+      cursor = page.pageInfo.endCursor ?? null;
+    }
   } catch (e) {
     console.error("Failed to fetch products for picker:", e);
   }
