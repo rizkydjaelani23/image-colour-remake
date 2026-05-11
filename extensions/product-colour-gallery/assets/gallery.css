@@ -29,7 +29,7 @@
 .pcg-toggle-title {
   font-size: 18px;
   font-weight: 700;
-  color: #111827;
+  color: var(--pcg-text, #111827);
   line-height: 1.2;
 }
 
@@ -47,10 +47,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #111827;
+  color: var(--pcg-text, #111827);
   font-size: 18px;
   font-weight: 700;
-  background: #fff;
+  background: var(--pcg-box-bg, #fff);
   flex-shrink: 0;
 }
 
@@ -66,7 +66,7 @@
   margin: 0 0 6px;
   font-size: 16px;
   font-weight: 700;
-  color: #111827;
+  color: var(--pcg-text, #111827);
 }
 
 .pcg-disclaimer {
@@ -90,8 +90,8 @@
 
 .pcg-family-button {
   border: 1px solid #d1d5db;
-  background: #ffffff;
-  color: #111827;
+  background: var(--pcg-box-bg, #ffffff);
+  color: var(--pcg-text, #111827);
   border-radius: 999px;
   padding: 8px 14px;
   cursor: pointer;
@@ -200,7 +200,7 @@
 .pcg-card-title {
   font-size: 11px;
   font-weight: 700;
-  color: #111827;
+  color: var(--pcg-text, #111827);
   line-height: 1.3;
 }
 

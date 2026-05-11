@@ -16,6 +16,7 @@
     --pcg-box-radius: {{ block.settings.box_radius }}px;
     --pcg-accent: {{ block.settings.accent_color }};
     --pcg-card-bg: {{ block.settings.card_bg }};
+    --pcg-text: {{ block.settings.text_color }};
   "
   {{ block.shopify_attributes }}
 ></div>
@@ -119,6 +120,13 @@
       "id": "card_bg",
       "label": "Colour card background",
       "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Text colour",
+      "info": "Applies to headings, card titles, and the toggle label.",
+      "default": "#111827"
     }
   ]
 }
