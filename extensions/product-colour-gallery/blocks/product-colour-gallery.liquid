@@ -9,6 +9,14 @@
   data-show-disclaimer="{{ block.settings.show_disclaimer }}"
   data-open-by-default="{{ block.settings.open_by_default }}"
   data-show-colour-preview="{{ block.settings.show_colour_preview }}"
+  data-show-colour-preview-mobile="{{ block.settings.show_colour_preview_mobile }}"
+  style="
+    --pcg-box-bg: {{ block.settings.box_bg }};
+    --pcg-box-border: {{ block.settings.box_border }};
+    --pcg-box-radius: {{ block.settings.box_radius }}px;
+    --pcg-accent: {{ block.settings.accent_color }};
+    --pcg-card-bg: {{ block.settings.card_bg }};
+  "
   {{ block.shopify_attributes }}
 ></div>
 
@@ -62,9 +70,55 @@
     {
       "type": "checkbox",
       "id": "show_colour_preview",
-      "label": "Show colour preview image when selected",
-      "info": "When enabled, clicking a colour swatch shows a larger preview image inside the gallery. Turn off if your theme already displays colours beside the main image.",
+      "label": "Show preview image on desktop",
+      "info": "When enabled, clicking a colour swatch shows a larger preview image inside the gallery on desktop. Turn off if your theme already displays the image beside the main product photo.",
       "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_colour_preview_mobile",
+      "label": "Show preview image on mobile",
+      "info": "Controls the inline preview image separately for mobile devices. Turn off to swap the main product image instead.",
+      "default": true
+    },
+    {
+      "type": "header",
+      "content": "Appearance"
+    },
+    {
+      "type": "color",
+      "id": "box_bg",
+      "label": "Box background colour",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "box_border",
+      "label": "Box border colour",
+      "default": "#e5e7eb"
+    },
+    {
+      "type": "range",
+      "id": "box_radius",
+      "label": "Corner roundness",
+      "min": 0,
+      "max": 32,
+      "step": 2,
+      "unit": "px",
+      "default": 18
+    },
+    {
+      "type": "color",
+      "id": "accent_color",
+      "label": "Accent colour",
+      "info": "Used for active colour card borders, selected fabric buttons, and the preview label bar.",
+      "default": "#111827"
+    },
+    {
+      "type": "color",
+      "id": "card_bg",
+      "label": "Colour card background",
+      "default": "#ffffff"
     }
   ]
 }

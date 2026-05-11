@@ -1,7 +1,7 @@
 .pcg-shell {
-  border: 1px solid #e5e7eb;
-  border-radius: 18px;
-  background: #ffffff;
+  border: 1px solid var(--pcg-box-border, #e5e7eb);
+  border-radius: var(--pcg-box-radius, 18px);
+  background: var(--pcg-box-bg, #ffffff);
   padding: 16px;
   margin-top: 18px;
 }
@@ -101,9 +101,9 @@
 }
 
 .pcg-family-button.is-active {
-  background: #111827;
+  background: var(--pcg-accent, #111827);
   color: #ffffff;
-  border-color: #111827;
+  border-color: var(--pcg-accent, #111827);
 }
 
 .pcg-gallery-layout {
@@ -141,14 +141,14 @@
 .pcg-card {
   border: 1px solid #d1d5db;
   border-radius: 12px;
-  background: #ffffff;
+  background: var(--pcg-card-bg, #ffffff);
   padding: 6px;
   cursor: pointer;
   text-align: left;
 }
 
 .pcg-card.is-active {
-  border: 2px solid #111827;
+  border: 2px solid var(--pcg-accent, #111827);
 }
 
 .pcg-card img {
@@ -236,7 +236,7 @@
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  background: #111827;
+  background: var(--pcg-accent, #111827);
   color: #ffffff;
   font-size: 14px;
   font-weight: 700;
@@ -264,7 +264,7 @@
 @media (max-width: 749px) {
   .pcg-shell {
     padding: 14px;
-    border-radius: 14px;
+    border-radius: var(--pcg-box-radius, 14px);
   }
 
   .pcg-toggle-title {

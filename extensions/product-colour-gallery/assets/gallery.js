@@ -60,11 +60,17 @@
     const disclaimer         = root.dataset.disclaimer       || "";
     const showDisclaimer     = root.dataset.showDisclaimer   === "true";
     const openByDefault      = root.dataset.openByDefault    === "true";
-    // true only when the attribute is explicitly "true" (checkbox checked).
-    // Liquid outputs "" for false booleans, not "false", so !== "false" always
-    // evaluated to true. Use === "true" to match the same pattern as the other
-    // checkbox settings (showDisclaimer, openByDefault).
-    const showColourPreview  = root.dataset.showColourPreview === "true";
+    // Desktop and mobile preview toggles — read independently.
+    // Liquid outputs "" for false booleans so we must use === "true".
+    const showColourPreviewDesktop = root.dataset.showColourPreview === "true";
+    const showColourPreviewMobile  = root.dataset.showColourPreviewMobile === "true";
+
+    // Evaluated at click time so it responds correctly if the window is resized.
+    function showColourPreview() {
+      return window.matchMedia("(max-width: 749px)").matches
+        ? showColourPreviewMobile
+        : showColourPreviewDesktop;
+    }
 
     if (!numericProductId || !shop) { root.innerHTML = ""; return; }
 
@@ -221,11 +227,11 @@
 
       if (isDeselect || !match) {
         if (existing) existing.remove();
-        if (!showColourPreview) swapMainImage(null, true); // restore original main image
+        if (!showColourPreview()) swapMainImage(null, true); // restore original main image
         return;
       }
 
-      if (!showColourPreview) {
+      if (!showColourPreview()) {
         swapMainImage(match.imageUrl, false); // swap main image instead of inline panel
         return;
       }
@@ -300,7 +306,7 @@
                 `).join("")}
               </div>
 
-              ${selectedPreview && showColourPreview ? `
+              ${selectedPreview && showColourPreview() ? `
                 <div class="pcg-colour-preview" id="pcg-colour-preview">
                   <img src="${escapeAttr(shopifyImgUrl(selectedPreview.imageUrl, 600))}"
                        alt="${escapeHtml(selectedPreview.colourName)}"
@@ -383,7 +389,7 @@
 
     // Capture the current main product image before first render so we can
     // restore it when the customer deselects a colour (original approach).
-    if (!showColourPreview) captureOriginalMainMedia();
+    if (!showColourPreview()) captureOriginalMainMedia();
 
     render();
   }
