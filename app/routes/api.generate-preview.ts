@@ -290,19 +290,28 @@ async function buildRealisticComposite(params: {
     const fabricLumRaw = 0.299 * fr + 0.587 * fg + 0.114 * fb;
 
     // ── Adaptive alpha ────────────────────────────────────────────────────
-    // Five tiers based on fabric luminosity:
-    //   Black/near-black (< 25):   0.82 — back off so tufting lines show on black
-    //   Dark  (25–84):             0.91 — strong coverage for navy/charcoal
-    //   Medium(85–160):            0.88 — balanced middle ground
-    //   Bright(160–210):           0.80 — let base shadow show on vivid colours
-    //   Near-white (> 210):        0.73 — cream/white washes out tufting shadows;
-    //                                     27% original shows through to keep lines visible
+    // Six tiers based on fabric luminosity:
+    //   Black/near-black (< 25):    0.82 — back off so tufting lines show on black
+    //   Dark        (25–84):        0.91 — strong coverage for navy/charcoal
+    //   Mid-dark    (85–129):       0.88 — balanced middle ground
+    //   Mid-light   (130–160):      0.83 — warm beige/taupe/mocha tones; texture
+    //                                      pattern on crushed/hammered velvet needs
+    //                                      more original showing through (17% vs 12%)
+    //   Bright      (160–210):      0.80 — vivid colours
+    //   Near-white  (> 210):        0.73 — cream/white; preserve tufting shadows
     const isBlackFabric     = fabricLumRaw < 25;
-    const isDarkFabric      = fabricLumRaw >= 25 && fabricLumRaw < 85;
-    const isBrightFabric    = fabricLumRaw > 160 && fabricLumRaw <= 210;
+    const isDarkFabric      = fabricLumRaw >= 25  && fabricLumRaw < 85;
+    const isMidDarkFabric   = fabricLumRaw >= 85  && fabricLumRaw < 130;
+    const isMidLightFabric  = fabricLumRaw >= 130 && fabricLumRaw <= 160;
+    const isBrightFabric    = fabricLumRaw > 160  && fabricLumRaw <= 210;
     const isNearWhiteFabric = fabricLumRaw > 210;
     const alphaBase = renderMode === "smooth-colour"
-      ? (isBlackFabric ? 0.82 : isDarkFabric ? 0.91 : isNearWhiteFabric ? 0.73 : isBrightFabric ? 0.80 : 0.88)
+      ? (isBlackFabric    ? 0.82
+       : isDarkFabric     ? 0.91
+       : isMidLightFabric ? 0.83
+       : isNearWhiteFabric ? 0.73
+       : isBrightFabric   ? 0.80
+       : 0.88) // isMidDarkFabric
       : blendStrength;
     const alpha = Math.max(0, Math.min(1, maskValue * alphaBase));
 
