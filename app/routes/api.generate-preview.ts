@@ -294,9 +294,9 @@ async function buildRealisticComposite(params: {
     //   Black/near-black (< 25):    0.82 — back off so tufting lines show on black
     //   Dark        (25–84):        0.91 — strong coverage for navy/charcoal
     //   Mid-dark    (85–129):       0.88 — balanced middle ground
-    //   Mid-light   (130–160):      0.83 — warm beige/taupe/mocha tones; texture
+    //   Mid-light   (130–160):      0.74 — warm beige/taupe/mocha tones; texture
     //                                      pattern on crushed/hammered velvet needs
-    //                                      more original showing through (17% vs 12%)
+    //                                      significant original showing through (26%)
     //   Bright      (160–210):      0.80 — vivid colours
     //   Near-white  (> 210):        0.73 — cream/white; preserve tufting shadows
     const isBlackFabric     = fabricLumRaw < 25;
@@ -308,7 +308,7 @@ async function buildRealisticComposite(params: {
     const alphaBase = renderMode === "smooth-colour"
       ? (isBlackFabric    ? 0.82
        : isDarkFabric     ? 0.91
-       : isMidLightFabric ? 0.83
+       : isMidLightFabric ? 0.74
        : isNearWhiteFabric ? 0.73
        : isBrightFabric   ? 0.80
        : 0.88) // isMidDarkFabric
