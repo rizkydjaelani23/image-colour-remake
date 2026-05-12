@@ -203,8 +203,19 @@ export default function PreviewManagerPage() {
   // Batch selection
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [batchSaving, setBatchSaving] = useState(false);
+  const [batchDeleting, setBatchDeleting] = useState(false);
   // Regeneration
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  // Upload real photo
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadColourName, setUploadColourName] = useState("");
+  const [uploadDisplayName, setUploadDisplayName] = useState("");
+  const [uploadFamily, setUploadFamily] = useState("");
+  const [uploadNewFamily, setUploadNewFamily] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadPreview, setUploadPreview] = useState<string | null>(null);
   // Filters & sort
   const [filterStatus, setFilterStatus] = useState<"all" | "DRAFT" | "APPROVED" | "HIDDEN" | "FEATURED">("all");
   const [filterStorefront, setFilterStorefront] = useState<"all" | "approved" | "unapproved">("all");
@@ -294,6 +305,64 @@ export default function PreviewManagerPage() {
     }
     setSelectedIds([]);
     setBatchSaving(false);
+  }
+
+  async function batchDelete() {
+    if (selectedIds.length === 0) return;
+    if (!window.confirm(`Remove ${selectedIds.length} colour${selectedIds.length !== 1 ? "s" : ""}? This cannot be undone.`)) return;
+    setBatchDeleting(true);
+    const ids = [...selectedIds];
+    for (const id of ids) {
+      await fetch("/api/preview-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ previewId: id }),
+      });
+    }
+    setPreviews((prev) => prev.filter((p) => !ids.includes(p.id)));
+    setSelectedIds([]);
+    setBatchDeleting(false);
+  }
+
+  async function uploadRealPhoto() {
+    if (!uploadFile || !loadedProduct) return;
+    const family = uploadNewFamily.trim() || uploadFamily.trim();
+    if (!uploadColourName.trim()) { setUploadError("Colour name is required"); return; }
+    if (!family) { setUploadError("Fabric family / category is required"); return; }
+
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const fd = new FormData();
+      fd.append("imageFile", uploadFile);
+      fd.append("shopifyProductId", loadedProduct.shopifyProductId);
+      fd.append("colourName", uploadColourName.trim());
+      fd.append("fabricFamily", family);
+      if (uploadDisplayName.trim()) fd.append("customerDisplayName", uploadDisplayName.trim());
+
+      const res = await fetch("/api/upload-preview", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+
+      // Add the new preview to the list
+      setPreviews((prev) => [data.preview, ...prev]);
+      setDraftNames((prev) => ({ ...prev, [data.preview.id]: data.preview.colourName }));
+      setDraftFamilies((prev) => ({ ...prev, [data.preview.id]: data.preview.fabricFamily }));
+      setDraftDisplayNames((prev) => ({ ...prev, [data.preview.id]: data.preview.customerDisplayName ?? "" }));
+
+      // Reset upload form
+      setUploadFile(null);
+      setUploadColourName("");
+      setUploadDisplayName("");
+      setUploadFamily("");
+      setUploadNewFamily("");
+      setUploadPreview(null);
+      setShowUpload(false);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
   }
 
   async function regeneratePreview(preview: PreviewItem) {
@@ -737,8 +806,154 @@ export default function PreviewManagerPage() {
         </div>
       )}
 
+      {/* ── Upload Real Photo ── */}
+      {loadedProduct && (
+        <div style={{ ...cardStyle, marginBottom: "22px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: "15px", color: "#111827" }}>📷 Upload your own photo</div>
+              <div style={{ fontSize: "13px", color: "#64748b", marginTop: "3px" }}>Already have a real photo of this product in a specific colour? Upload it here instead of using AI generation.</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => { setShowUpload((v) => !v); setUploadError(null); }}
+              style={{ ...secondaryButtonStyle, fontSize: "13px", padding: "8px 14px", whiteSpace: "nowrap" }}
+            >
+              {showUpload ? "✕ Cancel" : "+ Upload photo"}
+            </button>
+          </div>
+
+          {showUpload && (
+            <div style={{ marginTop: "18px", paddingTop: "18px", borderTop: "1px solid #e5e7eb", display: "grid", gap: "14px" }}>
+
+              {/* File picker */}
+              <div>
+                <div style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 700, marginBottom: "6px", letterSpacing: "0.06em" }}>PHOTO FILE <span style={{ color: "#dc2626" }}>*</span></div>
+                <label
+                  style={{
+                    display: "flex", alignItems: "center", gap: "12px",
+                    padding: "12px 14px", borderRadius: "12px",
+                    border: uploadFile ? "1px solid #a5b4fc" : "2px dashed #d1d5db",
+                    background: uploadFile ? "#eef2ff" : "#fafafa",
+                    cursor: "pointer",
+                  }}
+                >
+                  {uploadPreview ? (
+                    <img src={uploadPreview} alt="Preview" style={{ width: "64px", height: "64px", objectFit: "cover", borderRadius: "8px", border: "1px solid #e5e7eb", flexShrink: 0 }} />
+                  ) : (
+                    <div style={{ width: "64px", height: "64px", borderRadius: "8px", background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "24px", flexShrink: 0 }}>🖼️</div>
+                  )}
+                  <div>
+                    <div style={{ fontSize: "13px", fontWeight: 700, color: "#374151" }}>
+                      {uploadFile ? uploadFile.name : "Click to choose an image"}
+                    </div>
+                    <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "2px" }}>JPG, PNG, or WebP — max 10 MB</div>
+                  </div>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] ?? null;
+                      setUploadFile(file);
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (ev) => setUploadPreview(ev.target?.result as string);
+                        reader.readAsDataURL(file);
+                      } else {
+                        setUploadPreview(null);
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+
+              {/* Colour name + display name */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                <div>
+                  <div style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 700, marginBottom: "6px", letterSpacing: "0.06em" }}>COLOUR NAME <span style={{ color: "#dc2626" }}>*</span></div>
+                  <input
+                    type="text"
+                    value={uploadColourName}
+                    onChange={(e) => setUploadColourName(e.target.value)}
+                    placeholder="e.g. Charcoal Velvet"
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <div style={{ fontSize: "11px", color: "#6366f1", fontWeight: 700, marginBottom: "6px", letterSpacing: "0.06em" }}>STOREFRONT NAME <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional)</span></div>
+                  <input
+                    type="text"
+                    value={uploadDisplayName}
+                    onChange={(e) => setUploadDisplayName(e.target.value)}
+                    placeholder={`Leave blank to use colour name`}
+                    style={{ ...inputStyle, border: uploadDisplayName ? "1px solid #a5b4fc" : "1px solid #d1d5db" }}
+                  />
+                </div>
+              </div>
+
+              {/* Fabric family */}
+              <div>
+                <div style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 700, marginBottom: "6px", letterSpacing: "0.06em" }}>FABRIC FAMILY / CATEGORY <span style={{ color: "#dc2626" }}>*</span></div>
+                {categoryOptions.length > 0 ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                    <select
+                      value={uploadFamily}
+                      onChange={(e) => { setUploadFamily(e.target.value); setUploadNewFamily(""); }}
+                      style={inputStyle}
+                    >
+                      <option value="">— pick existing —</option>
+                      {categoryOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                    <input
+                      type="text"
+                      value={uploadNewFamily}
+                      onChange={(e) => { setUploadNewFamily(e.target.value); setUploadFamily(""); }}
+                      placeholder="Or type a new one…"
+                      style={inputStyle}
+                    />
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    value={uploadNewFamily}
+                    onChange={(e) => setUploadNewFamily(e.target.value)}
+                    placeholder="e.g. Velvet, Linen, Boucle"
+                    style={inputStyle}
+                  />
+                )}
+              </div>
+
+              {uploadError && (
+                <div style={{ padding: "10px 14px", borderRadius: "10px", background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", fontSize: "13px" }}>
+                  {uploadError}
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button
+                  type="button"
+                  disabled={uploading || !uploadFile}
+                  onClick={uploadRealPhoto}
+                  style={{ ...primaryButtonStyle, opacity: (!uploadFile || uploading) ? 0.5 : 1, cursor: (!uploadFile || uploading) ? "not-allowed" : "pointer" }}
+                >
+                  {uploading ? "Uploading…" : "Upload & add to previews"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowUpload(false); setUploadFile(null); setUploadPreview(null); setUploadColourName(""); setUploadDisplayName(""); setUploadFamily(""); setUploadNewFamily(""); setUploadError(null); }}
+                  style={secondaryButtonStyle}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {!loading && loadedProduct && previews.length === 0 && (
-        <div style={cardStyle}><h2 style={{ marginTop: 0 }}>No previews found</h2><p style={{ marginBottom: 0, color: "#64748b" }}>Create previews in the Visualiser first.</p></div>
+        <div style={cardStyle}><h2 style={{ marginTop: 0 }}>No previews found</h2><p style={{ marginBottom: 0, color: "#64748b" }}>Create previews in the Visualiser, or upload a real photo above.</p></div>
       )}
 
       {/* ── Batch action bar ── */}
@@ -773,6 +988,14 @@ export default function PreviewManagerPage() {
               style={{ padding: "8px 16px", borderRadius: "10px", border: "1px solid #64748b", background: "rgba(255,255,255,0.1)", color: "#fff", cursor: "pointer", font: "inherit", fontWeight: 700, fontSize: "13px" }}
             >
               Unapprove all
+            </button>
+            <button
+              type="button"
+              disabled={batchDeleting || batchSaving}
+              onClick={batchDelete}
+              style={{ padding: "8px 16px", borderRadius: "10px", border: "1px solid #ef4444", background: "rgba(239,68,68,0.15)", color: "#fca5a5", cursor: "pointer", font: "inherit", fontWeight: 700, fontSize: "13px" }}
+            >
+              {batchDeleting ? "Deleting…" : `Delete ${selectedIds.length}`}
             </button>
             <button
               type="button"
