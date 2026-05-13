@@ -23,13 +23,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         : null,
       messages: conv?.messages ?? [],
     },
-    {
-      headers: {
-        // Never cache — replies must appear immediately on the next poll
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-        "Pragma": "no-cache",
-      },
-    }
+    { headers: { "Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache" } }
   );
 }
 
