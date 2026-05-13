@@ -143,35 +143,118 @@
 
     // ── Main product image swap ───────────────────────────────────────────
     // Used when showColourPreview is false.
-    // Restored to the original working approach: find the VISIBLE product
-    // image using getBoundingClientRect(), save its src/srcset/sizes, then
-    // directly set img.src. Simple and reliable across all themes.
+    // Strategy:
+    //   1. Try theme-specific selectors (active slide first, then any product media)
+    //   2. Fall back to the largest visible <img> on the page outside our widget
+    // Handles <picture> elements by also clearing <source srcset> so the browser
+    // can't override the img.src we set.
     var _originalMainMedia = null;
 
+    // Returns true if an <img> is visible and large enough to be a main product image
+    function isLargeVisibleImg(img) {
+      if (!(img instanceof HTMLImageElement)) return false;
+      var rect  = img.getBoundingClientRect();
+      var style = window.getComputedStyle(img);
+      return (
+        rect.width  > 100 &&
+        rect.height > 100 &&
+        style.display    !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity    !== "0"
+      );
+    }
+
+    // Returns true if the element is inside our gallery widget (don't swap those)
+    function isInsideWidget(el) {
+      var node = el;
+      while (node) {
+        if (node === root) return true;
+        node = node.parentElement;
+      }
+      return false;
+    }
+
     function getMainProductImage() {
+      // ── 1. Theme-specific selectors (most precise — active/selected states first)
       var selectors = [
+        // Active/selected slide states (common sliders)
         ".splide__slide.is-active img",
         ".swiper-slide-active img",
-        ".product__media-wrapper .is-active img",
+        ".slick-active img",
+        ".flickity-is-selected img",
+        // Dawn / Craft / Crave / Sense / Debut 2 (Shopify default themes)
         ".product__media-item.is-active img",
+        ".product__media-item--single img",
+        ".product__media-wrapper .is-active img",
         ".product__media img",
+        // Prestige theme
+        ".Product__MainImage img",
+        ".product-gallery__image-wrapper.is-selected img",
+        ".product-gallery__main img",
+        // Empire / Editions theme
+        ".product-photo-container img",
+        ".product__photo--main img",
+        // Impulse / Motion theme
+        ".product__photo img",
+        ".product-images .is-active img",
+        ".product-images img",
+        // Turbo theme
+        ".product-image__container img",
+        ".product_image-slide.is-active img",
+        // Debut theme (classic)
+        ".product-single__photo img",
+        ".product-single__photos img",
+        // Narrative / Simple / Express
+        ".product-img-wrapper img",
+        ".product__image img",
+        // Pipeline / Palo Alto
+        ".product-main-image img",
+        ".product-main-photos img",
+        // Broadcast / Fetch / Warehouse
+        ".product__gallery-item.is-selected img",
+        ".product__gallery-item.active img",
+        ".product__image-wrapper img",
+        // Generic catch-alls
         "[data-media-id] img",
+        ".product-media img",
+        ".product_image img",
+        ".js-product-featured-image",
+        "[data-zoom-image]",
       ];
+
       for (var i = 0; i < selectors.length; i++) {
         var images = Array.from(document.querySelectorAll(selectors[i]));
         var visible = images.find(function (img) {
-          if (!(img instanceof HTMLImageElement)) return false;
-          var rect  = img.getBoundingClientRect();
-          var style = window.getComputedStyle(img);
-          return (
-            rect.width  > 40 &&
-            rect.height > 40 &&
-            style.display     !== "none" &&
-            style.visibility  !== "hidden"
-          );
+          return isLargeVisibleImg(img) && !isInsideWidget(img);
         });
         if (visible) return visible;
       }
+
+      // ── 2. Broad fallback: largest visible <img> on the page outside our widget
+      // Search inside likely product containers first, then the whole page.
+      var searchRoots = [
+        document.querySelector('[data-section-type="product"]'),
+        document.querySelector('[id*="shopify-section-"][id*="product"]'),
+        document.querySelector("main"),
+        document.body,
+      ].filter(Boolean);
+
+      for (var r = 0; r < searchRoots.length; r++) {
+        var allImgs = Array.from(searchRoots[r].querySelectorAll("img"));
+        var candidates = allImgs.filter(function (img) {
+          return isLargeVisibleImg(img) && !isInsideWidget(img);
+        });
+        if (!candidates.length) continue;
+
+        // Pick the largest by rendered area
+        var best = candidates.reduce(function (a, b) {
+          var ra = a.getBoundingClientRect();
+          var rb = b.getBoundingClientRect();
+          return (ra.width * ra.height >= rb.width * rb.height) ? a : b;
+        });
+        return best;
+      }
+
       return null;
     }
 
@@ -179,18 +262,27 @@
       if (_originalMainMedia) return; // already saved
       var img = getMainProductImage();
       if (!img) return;
+      // Also capture <source> elements inside a <picture> wrapper
+      var sources = [];
+      if (img.parentElement && img.parentElement.tagName === "PICTURE") {
+        sources = Array.from(img.parentElement.querySelectorAll("source")).map(function (s) {
+          return { el: s, srcset: s.getAttribute("srcset") || "", sizes: s.getAttribute("sizes") || "" };
+        });
+      }
       _originalMainMedia = {
+        img:    img,
         src:    img.getAttribute("src")    || "",
         srcset: img.getAttribute("srcset") || "",
         sizes:  img.getAttribute("sizes")  || "",
         alt:    img.getAttribute("alt")    || "",
+        sources: sources,
       };
     }
 
     function swapMainImage(url, isDeselect) {
       if (isDeselect || !url) {
         if (!_originalMainMedia) return;
-        var img = getMainProductImage();
+        var img = _originalMainMedia.img || getMainProductImage();
         if (img) {
           img.src = _originalMainMedia.src;
           if (_originalMainMedia.srcset) img.setAttribute("srcset", _originalMainMedia.srcset);
@@ -198,16 +290,31 @@
           if (_originalMainMedia.sizes)  img.setAttribute("sizes",  _originalMainMedia.sizes);
           else img.removeAttribute("sizes");
           img.alt = _originalMainMedia.alt;
+          // Restore <source> elements
+          _originalMainMedia.sources.forEach(function (s) {
+            if (s.srcset) s.el.setAttribute("srcset", s.srcset);
+            else s.el.removeAttribute("srcset");
+            if (s.sizes) s.el.setAttribute("sizes", s.sizes);
+            else s.el.removeAttribute("sizes");
+          });
         }
         _originalMainMedia = null;
         return;
       }
 
       captureOriginalMainMedia();
-      var img = getMainProductImage();
+      var img = _originalMainMedia ? _originalMainMedia.img : getMainProductImage();
       if (!img) return;
 
-      img.src = shopifyImgUrl(url, 800);
+      // Clear <source> srcsets so the browser uses our img.src (not the picture element srcset)
+      if (img.parentElement && img.parentElement.tagName === "PICTURE") {
+        Array.from(img.parentElement.querySelectorAll("source")).forEach(function (s) {
+          s.removeAttribute("srcset");
+          s.removeAttribute("sizes");
+        });
+      }
+
+      img.src = shopifyImgUrl(url, 1200);
       img.removeAttribute("srcset");
       img.removeAttribute("sizes");
     }
