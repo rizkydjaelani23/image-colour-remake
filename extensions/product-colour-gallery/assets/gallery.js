@@ -174,6 +174,52 @@
       return false;
     }
 
+    // Returns true if the element is inside a recommendations / upsell / cross-sell
+    // section — these should never be treated as the main product image.
+    function isInExcludedSection(el) {
+      var patterns = [
+        ".product-recommendations",
+        ".complementary-products",
+        ".related-products",
+        ".recently-viewed",
+        ".frequently-bought-together",
+        "[data-section-type=\"product-recommendations\"]",
+        "[data-section-type=\"related-products\"]",
+        "[data-section-type=\"complementary-products\"]",
+        "[data-section-type=\"cross-sell\"]",
+        "[class*=\"recommendation\"]",
+        "[class*=\"upsell\"]",
+        "[class*=\"cross-sell\"]",
+        "[class*=\"finish-the-look\"]",
+        "[class*=\"related\"]",
+        "[id*=\"recommendation\"]",
+        "[id*=\"related-products\"]",
+      ];
+      for (var p = 0; p < patterns.length; p++) {
+        try { if (el.closest(patterns[p])) return true; } catch (_) {}
+      }
+      return false;
+    }
+
+    // Walk up from our widget to find the nearest Shopify section ancestor.
+    // Restricting the image search to this scope prevents us from accidentally
+    // picking up images in other sections (e.g. "Finish the look" carousels).
+    function getProductSectionRoot() {
+      var node = root.parentElement;
+      while (node && node !== document.body) {
+        // Shopify wraps each section in a div with class "shopify-section"
+        if (node.classList && node.classList.contains("shopify-section")) return node;
+        // Some themes use data-section-type on the section itself
+        if (node.dataset && node.dataset.sectionType) return node;
+        node = node.parentElement;
+      }
+      return null;
+    }
+
+    function isGoodCandidate(img) {
+      return isLargeVisibleImg(img) && !isInsideWidget(img) && !isInExcludedSection(img);
+    }
+
     function getMainProductImage() {
       // ── 1. Theme-specific selectors (most precise — active/selected states first)
       var selectors = [
@@ -224,26 +270,31 @@
 
       for (var i = 0; i < selectors.length; i++) {
         var images = Array.from(document.querySelectorAll(selectors[i]));
-        var visible = images.find(function (img) {
-          return isLargeVisibleImg(img) && !isInsideWidget(img);
-        });
+        var visible = images.find(isGoodCandidate);
         if (visible) return visible;
       }
 
-      // ── 2. Broad fallback: largest visible <img> on the page outside our widget
-      // Search inside likely product containers first, then the whole page.
+      // ── 2. Broad fallback: largest visible <img> — scoped to our section first
+      // Never search the whole page; always start from the nearest section ancestor
+      // so we don't accidentally pick up images in "Finish the look" / upsell sections.
+      var productSection = getProductSectionRoot();
       var searchRoots = [
+        productSection,
         document.querySelector('[data-section-type="product"]'),
+        document.querySelector('[data-section-type="main-product"]'),
         document.querySelector('[id*="shopify-section-"][id*="product"]'),
-        document.querySelector("main"),
-        document.body,
+        // intentionally NOT including document.querySelector("main") or document.body
+        // to avoid cross-section image leakage
       ].filter(Boolean);
 
+      // Deduplicate — if productSection IS the shopify-section, no double search
+      var seen = new Set();
       for (var r = 0; r < searchRoots.length; r++) {
+        if (seen.has(searchRoots[r])) continue;
+        seen.add(searchRoots[r]);
+
         var allImgs = Array.from(searchRoots[r].querySelectorAll("img"));
-        var candidates = allImgs.filter(function (img) {
-          return isLargeVisibleImg(img) && !isInsideWidget(img);
-        });
+        var candidates = allImgs.filter(isGoodCandidate);
         if (!candidates.length) continue;
 
         // Pick the largest by rendered area
