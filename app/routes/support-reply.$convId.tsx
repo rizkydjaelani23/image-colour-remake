@@ -98,20 +98,20 @@ function ChatDashboard({ loader }: { loader: Extract<LoaderData, { ok: true }> }
     scrollToBottom();
   }, [messages.length, scrollToBottom]);
 
-  // Poll for new messages every 3 s (cache-busted)
+  // Poll for new messages every 3 s via a pure API route (no React component)
+  // so we always get JSON back, never HTML.
   useEffect(() => {
     const poll = async () => {
       try {
         const res  = await fetch(
-          `/support-reply/${convId}?token=${encodeURIComponent(token)}&_t=${Date.now()}`,
-          { headers: { Accept: "application/json" } }
+          `/api/support-messages-public?token=${encodeURIComponent(token)}&convId=${encodeURIComponent(convId)}&_t=${Date.now()}`
         );
-        const data = await res.json() as LoaderData;
-        if (data.ok) {
+        const data = await res.json() as { ok: boolean; messages?: Msg[] };
+        if (data.ok && Array.isArray(data.messages)) {
           setMessages((prev) => {
             const confirmedCount = prev.filter((m) => !m.id.startsWith("opt-")).length;
             // Replace state with server truth when server has >= confirmed msgs
-            if (data.messages.length >= confirmedCount) return data.messages;
+            if (data.messages!.length >= confirmedCount) return data.messages!;
             return prev;
           });
         }
