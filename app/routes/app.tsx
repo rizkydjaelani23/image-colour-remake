@@ -18,21 +18,49 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 function SupportButton() {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen]         = useState(false);
+  const [message, setMessage]   = useState("");
+  const [sending, setSending]   = useState(false);
+  const [sent, setSent]         = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
 
-  const mailtoLink =
-    `mailto:${SUPPORT_EMAIL}` +
-    `?subject=${encodeURIComponent("Image Colour Remake – Support Request")}` +
-    `&body=${encodeURIComponent(
-      "Hi,\n\nI need help with the following:\n\n[Please describe your issue here]\n\nThanks"
-    )}`;
+  async function sendMessage() {
+    if (!message.trim()) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      const res = await fetch("/api/support-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to send");
+      setSent(true);
+      setMessage("");
+      setTimeout(() => { setSent(false); setOpen(false); }, 3000);
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function openEmail() {
+    const mailtoLink =
+      `mailto:${SUPPORT_EMAIL}` +
+      `?subject=${encodeURIComponent("Image Colour Remake – Support Request")}` +
+      `&body=${encodeURIComponent("Hi,\n\nI need help with the following:\n\n[Please describe your issue here]\n\nThanks")}`;
+    // Use window.top to escape the Shopify iframe — direct href is blocked inside embedded apps
+    try { (window.top || window).location.href = mailtoLink; } catch { window.open(mailtoLink, "_blank"); }
+  }
 
   return (
     <>
       {/* Floating button */}
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => { setOpen((v) => !v); setSent(false); setSendError(null); }}
         title="Contact support"
         style={{
           position: "fixed",
@@ -75,91 +103,84 @@ function SupportButton() {
           }}
         >
           {/* Header */}
-          <div
-            style={{
-              background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-              padding: "18px 20px",
-            }}
-          >
+          <div style={{ background: "linear-gradient(135deg, #4f46e5, #7c3aed)", padding: "18px 20px" }}>
             <div style={{ fontSize: "15px", fontWeight: 800, color: "#ffffff", marginBottom: "4px" }}>
-              Need help?
+              💬 Chat with us
             </div>
-            <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.75)", lineHeight: 1.5 }}>
-              Send us a message and we'll get back to you as soon as possible.
+            <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.8)", lineHeight: 1.5 }}>
+              Send us a message — we reply fast.
             </div>
           </div>
 
           {/* Body */}
-          <div style={{ padding: "18px 20px" }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "10px",
-                marginBottom: "16px",
-                padding: "10px 12px",
-                borderRadius: "12px",
-                background: "#f8fafc",
-                border: "1px solid #e5e7eb",
-              }}
-            >
-              <div
-                style={{
-                  width: "36px",
-                  height: "36px",
-                  borderRadius: "50%",
-                  background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: "16px",
-                  flexShrink: 0,
-                }}
-              >
-                🏠
+          <div style={{ padding: "16px 18px" }}>
+            {sent ? (
+              <div style={{ textAlign: "center", padding: "20px 0" }}>
+                <div style={{ fontSize: "32px", marginBottom: "8px" }}>✅</div>
+                <div style={{ fontWeight: 700, color: "#111827", marginBottom: "4px" }}>Message sent!</div>
+                <div style={{ fontSize: "12px", color: "#64748b" }}>We'll get back to you shortly.</div>
               </div>
-              <div>
-                <div style={{ fontSize: "13px", fontWeight: 700, color: "#0f172a" }}>
-                  Power Your House
-                </div>
-                <div style={{ fontSize: "11px", color: "#64748b" }}>
-                  {SUPPORT_EMAIL}
-                </div>
-              </div>
-            </div>
+            ) : (
+              <>
+                <textarea
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  placeholder="Describe your issue or question…"
+                  rows={4}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    borderRadius: "10px",
+                    border: "1px solid #d1d5db",
+                    font: "inherit",
+                    fontSize: "13px",
+                    resize: "none",
+                    boxSizing: "border-box",
+                    marginBottom: "10px",
+                    outline: "none",
+                  }}
+                />
 
-            <a
-              href={mailtoLink}
-              style={{
-                display: "block",
-                width: "100%",
-                padding: "12px",
-                borderRadius: "12px",
-                background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-                color: "#ffffff",
-                textAlign: "center",
-                fontWeight: 700,
-                fontSize: "14px",
-                textDecoration: "none",
-                boxShadow: "0 4px 12px rgba(79,70,229,0.3)",
-                boxSizing: "border-box",
-              }}
-              onClick={() => setOpen(false)}
-            >
-              ✉️ Send us an email
-            </a>
+                {sendError && (
+                  <div style={{ padding: "8px 10px", borderRadius: "8px", background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", fontSize: "12px", marginBottom: "10px" }}>
+                    {sendError}
+                  </div>
+                )}
 
-            <div
-              style={{
-                marginTop: "12px",
-                fontSize: "11px",
-                color: "#94a3b8",
-                textAlign: "center",
-                lineHeight: 1.5,
-              }}
-            >
-              We typically reply within 24 hours
-            </div>
+                <button
+                  type="button"
+                  disabled={sending || !message.trim()}
+                  onClick={sendMessage}
+                  style={{
+                    width: "100%",
+                    padding: "11px",
+                    borderRadius: "10px",
+                    background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                    color: "#ffffff",
+                    fontWeight: 700,
+                    fontSize: "14px",
+                    border: "none",
+                    cursor: sending || !message.trim() ? "not-allowed" : "pointer",
+                    opacity: !message.trim() ? 0.5 : 1,
+                    marginBottom: "10px",
+                    font: "inherit",
+                  }}
+                >
+                  {sending ? "Sending…" : "Send message"}
+                </button>
+
+                <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: "10px", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                  <span style={{ fontSize: "11px", color: "#94a3b8" }}>or</span>
+                  <button
+                    type="button"
+                    onClick={openEmail}
+                    style={{ background: "none", border: "none", cursor: "pointer", fontSize: "12px", color: "#4f46e5", fontWeight: 600, padding: 0, font: "inherit" }}
+                  >
+                    ✉️ Email us instead
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
