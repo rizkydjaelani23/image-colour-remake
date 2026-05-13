@@ -74,57 +74,66 @@ export async function action({ request }: ActionFunctionArgs) {
     });
   }
 
-  // Forward to Google Chat webhook as a card (fire and forget)
+  // Forward to Google Chat webhook (fire and forget)
+  // Uses Cards v1 format — the only card format supported by incoming webhooks.
+  // cardsV2 requires a full Chat bot app and is NOT supported here.
+  // The inbox link uses the Shopify admin URL so it opens without re-auth.
   const webhookUrl = process.env.GOOGLE_CHAT_WEBHOOK_URL;
   if (webhookUrl) {
-    const timestamp = new Date().toLocaleString("en-AU", { timeZone: "Australia/Sydney" });
-    const inboxUrl  = `https://image-colour-remake-production.up.railway.app/app/support-inbox?conv=${conv.id}`;
+    const timestamp  = new Date().toLocaleString("en-AU", { timeZone: "Australia/Sydney" });
+    const shopHandle = session.shop.replace(".myshopify.com", "");
+    const inboxUrl   = `https://admin.shopify.com/store/${shopHandle}/apps/image-colour-remake-2/support-inbox?conv=${conv.id}`;
+
     fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        cardsV2: [{
-          cardId: `support-${msg.id}`,
-          card: {
-            header: {
-              title: "🛎️ New support message",
-              subtitle: session.shop,
-            },
-            sections: [
-              {
-                widgets: [
-                  {
-                    decoratedText: {
-                      topLabel: "Message",
-                      text: body.trim(),
-                      wrapText: true,
-                    },
-                  },
-                  {
-                    decoratedText: {
-                      topLabel: "Time",
-                      text: `${timestamp} AEST`,
-                    },
-                  },
-                ],
-              },
-              {
-                header: "⚠️  Reply inside the app — replies typed here won't reach the customer",
-                widgets: [
-                  {
-                    buttonList: {
-                      buttons: [
-                        {
-                          text: "💬 Open Support Inbox & Reply",
-                          onClick: { openLink: { url: inboxUrl } },
-                        },
-                      ],
-                    },
-                  },
-                ],
-              },
-            ],
+        cards: [{
+          header: {
+            title: "🛎️ New support message",
+            subtitle: session.shop,
+            imageUrl: "https://fonts.gstatic.com/s/i/googlematerialicons/chat/v6/white-24dp/1x/gm_chat_white_24dp.png",
           },
+          sections: [
+            {
+              widgets: [
+                {
+                  keyValue: {
+                    topLabel: "Message",
+                    content: body.trim(),
+                    contentMultiline: "true",
+                  },
+                },
+                {
+                  keyValue: {
+                    topLabel: "Time",
+                    content: `${timestamp} AEST`,
+                  },
+                },
+                {
+                  textParagraph: {
+                    text: "<b>⚠️ Reply in the Support Inbox below — do NOT reply in Google Chat or the customer won't see it.</b>",
+                  },
+                },
+              ],
+            },
+            {
+              widgets: [
+                {
+                  buttons: [
+                    {
+                      textButton: {
+                        text: "💬 Open Support Inbox & Reply",
+                        onClick: {
+                          openLink: { url: inboxUrl },
+                        },
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
         }],
       }),
     }).catch((e) => console.error("Google Chat webhook error:", e));
