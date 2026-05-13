@@ -23,10 +23,11 @@ model Shop {
 
   usage ShopUsage?
 
-  products Product[]
-  zones    Zone[]
-  swatches Swatch[]
-  previews Preview[]
+  products      Product[]
+  zones         Zone[]
+  swatches      Swatch[]
+  previews      Preview[]
+  conversations SupportConversation[]
 }
 
 model Product {
@@ -140,6 +141,33 @@ model Session {
 
   refreshToken        String?
   refreshTokenExpires DateTime?
+}
+
+model SupportConversation {
+  id         String   @id @default(cuid())
+  shopId     String
+  shopDomain String
+  status     String   @default("open") // open | closed
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  shop     Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  messages SupportMessage[]
+
+  @@index([shopId])
+  @@index([status])
+}
+
+model SupportMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  body           String
+  sender         String   // "merchant" | "support" | "system"
+  createdAt      DateTime @default(now())
+
+  conversation SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
 }
 
 model ShopUsage {
