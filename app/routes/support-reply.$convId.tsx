@@ -82,7 +82,14 @@ export async function action({ request, params }: ActionFunctionArgs): Promise<R
     data: { updatedAt: new Date() },
   });
 
-  return Response.json({ ok: true, message: newMsg } satisfies ActionData);
+  const msgOut: Msg = {
+    id: newMsg.id,
+    body: newMsg.body,
+    sender: newMsg.sender,
+    createdAt: newMsg.createdAt.toISOString(),
+  };
+
+  return Response.json({ ok: true, message: msgOut } satisfies ActionData);
 }
 
 export default function SupportReplyPage() {
