@@ -11,7 +11,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     include: { messages: { orderBy: { createdAt: "asc" } } },
   });
 
-  return Response.json({ conversations });
+  return Response.json(
+    { conversations },
+    { headers: { "Cache-Control": "no-store, no-cache, must-revalidate" } }
+  );
 }
 
 // POST /api/support-conversations — admin: close a conversation

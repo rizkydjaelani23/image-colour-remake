@@ -16,12 +16,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
     include: { messages: { orderBy: { createdAt: "asc" } } },
   });
 
-  return Response.json({
-    conversation: conv
-      ? { id: conv.id, status: conv.status, shopDomain: conv.shopDomain }
-      : null,
-    messages: conv?.messages ?? [],
-  });
+  return Response.json(
+    {
+      conversation: conv
+        ? { id: conv.id, status: conv.status, shopDomain: conv.shopDomain }
+        : null,
+      messages: conv?.messages ?? [],
+    },
+    {
+      headers: {
+        // Never cache — replies must appear immediately on the next poll
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+      },
+    }
+  );
 }
 
 // POST /api/support-chat — merchant sends a message

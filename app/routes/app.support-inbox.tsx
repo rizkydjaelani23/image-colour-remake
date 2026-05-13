@@ -38,15 +38,15 @@ export default function SupportInboxPage() {
 
   const active = conversations.find((c) => c.id === activeId) ?? null;
 
-  // Poll for new messages every 5s
+  // Poll for new messages every 3s — cache-busted so replies appear immediately
   useEffect(() => {
     const timer = setInterval(async () => {
       try {
-        const res  = await fetch("/api/support-conversations");
+        const res  = await fetch(`/api/support-conversations?_t=${Date.now()}`);
         const data = await res.json();
         if (res.ok) setConversations(data.conversations);
       } catch { /* silent */ }
-    }, 5000);
+    }, 3000);
     return () => clearInterval(timer);
   }, []);
 
@@ -82,10 +82,13 @@ export default function SupportInboxPage() {
   }
 
   async function closeConversation(convId: string) {
-    await fetch(`/api/support-conversations?close=${convId}`, { method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversationId: convId, action: "close" }),
-    });
+    try {
+      await fetch("/api/support-conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: convId, action: "close" }),
+      });
+    } catch { /* ignore — optimistic update below */ }
     setConversations((prev) =>
       prev.map((c) => c.id === convId ? { ...c, status: "closed" } : c)
     );

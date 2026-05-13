@@ -65,9 +65,16 @@ function SupportButton() {
     try { (window.top || window).location.href = link; } catch { window.open(link, "_blank"); }
   }
 
+  // Always bust the cache — without this, browsers return a stale GET response
+  // and support replies never appear in the merchant's widget
+  function chatUrl() {
+    return `/api/support-chat?_t=${Date.now()}`;
+  }
+
   const loadConversation = useCallback(async () => {
+    setLoadError(null);
     try {
-      const res  = await fetch("/api/support-chat");
+      const res  = await fetch(chatUrl());
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setConvId(data.conversation?.id ?? null);
@@ -84,14 +91,14 @@ function SupportButton() {
     if (pollRef.current) return;
     pollRef.current = setInterval(async () => {
       try {
-        const res  = await fetch("/api/support-chat");
+        const res  = await fetch(chatUrl());
         const data = await res.json();
         if (res.ok) {
           setConvId(data.conversation?.id ?? null);
           setMessages(data.messages ?? []);
         }
       } catch { /* silent */ }
-    }, 4000);
+    }, 3000); // 3s — snappy enough to feel live
   }, []);
 
   const stopPolling = useCallback(() => {
@@ -100,13 +107,16 @@ function SupportButton() {
 
   useEffect(() => {
     if (open && view === "chat") {
-      if (!hasLoaded) loadConversation();
+      // Always reload when entering chat view — never serve stale state
+      loadConversation();
       startPolling();
     } else {
       stopPolling();
+      // Reset so next open does a fresh load
+      if (!open) setHasLoaded(false);
     }
     return stopPolling;
-  }, [open, view, hasLoaded, loadConversation, startPolling, stopPolling]);
+  }, [open, view, loadConversation, startPolling, stopPolling]);
 
   // Scroll to bottom when new messages arrive
   useEffect(() => {
