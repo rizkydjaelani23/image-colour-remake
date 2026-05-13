@@ -81,8 +81,8 @@ export async function action({ request }: ActionFunctionArgs) {
   const webhookUrl = process.env.GOOGLE_CHAT_WEBHOOK_URL;
   if (webhookUrl) {
     const timestamp  = new Date().toLocaleString("en-AU", { timeZone: "Australia/Sydney" });
-    const shopHandle = session.shop.replace(".myshopify.com", "");
-    const inboxUrl   = `https://admin.shopify.com/store/${shopHandle}/apps/image-colour-remake-2/support-inbox?conv=${conv.id}`;
+    const secret   = process.env.SUPPORT_REPLY_SECRET || "change-me-please";
+    const inboxUrl = `https://image-colour-remake-production.up.railway.app/support-reply/${conv.id}?token=${encodeURIComponent(secret)}`;
 
     fetch(webhookUrl, {
       method: "POST",
