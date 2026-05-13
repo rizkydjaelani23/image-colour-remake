@@ -55,10 +55,9 @@ export async function loader({ request, params }: LoaderFunctionArgs): Promise<R
 }
 
 export async function action({ request, params }: ActionFunctionArgs): Promise<Response> {
-  const formData = await request.formData();
-  const token    = (formData.get("token") as string) ?? "";
-  const body     = ((formData.get("body") as string) ?? "").trim();
-  const convId   = params.convId ?? "";
+  const { token = "", body: rawBody = "" } = await request.json() as { token?: string; body?: string };
+  const body   = rawBody.trim();
+  const convId = params.convId ?? "";
 
   if (!token || token !== getSecret()) {
     return Response.json({ ok: false, error: "Invalid token." } satisfies ActionData, { status: 401 });
@@ -166,11 +165,11 @@ function ChatDashboard({ loader }: { loader: Extract<LoaderData, { ok: true }> }
     setSending(true);
 
     try {
-      const fd = new FormData();
-      fd.append("token", token);
-      fd.append("body", body);
-
-      const res  = await fetch(`/support-reply/${convId}`, { method: "POST", body: fd });
+      const res  = await fetch(`/support-reply/${convId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ token, body }),
+      });
       const data = await res.json() as ActionData;
 
       if (!data.ok) {
