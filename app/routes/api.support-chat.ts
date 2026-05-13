@@ -74,20 +74,58 @@ export async function action({ request }: ActionFunctionArgs) {
     });
   }
 
-  // Forward to Google Chat webhook (fire and forget)
+  // Forward to Google Chat webhook as a card (fire and forget)
   const webhookUrl = process.env.GOOGLE_CHAT_WEBHOOK_URL;
   if (webhookUrl) {
     const timestamp = new Date().toLocaleString("en-AU", { timeZone: "Australia/Sydney" });
+    const inboxUrl  = `https://image-colour-remake-production.up.railway.app/app/support-inbox?conv=${conv.id}`;
     fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        text:
-          `🛎️ *New support message*\n` +
-          `*Shop:* ${session.shop}\n` +
-          `*Time:* ${timestamp} AEST\n` +
-          `*Reply at:* https://image-colour-remake-production.up.railway.app/app/support-inbox\n\n` +
-          body.trim(),
+        cardsV2: [{
+          cardId: `support-${msg.id}`,
+          card: {
+            header: {
+              title: "🛎️ New support message",
+              subtitle: session.shop,
+            },
+            sections: [
+              {
+                widgets: [
+                  {
+                    decoratedText: {
+                      topLabel: "Message",
+                      text: body.trim(),
+                      wrapText: true,
+                    },
+                  },
+                  {
+                    decoratedText: {
+                      topLabel: "Time",
+                      text: `${timestamp} AEST`,
+                    },
+                  },
+                ],
+              },
+              {
+                header: "⚠️  Reply inside the app — replies typed here won't reach the customer",
+                widgets: [
+                  {
+                    buttonList: {
+                      buttons: [
+                        {
+                          text: "💬 Open Support Inbox & Reply",
+                          onClick: { openLink: { url: inboxUrl } },
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        }],
       }),
     }).catch((e) => console.error("Google Chat webhook error:", e));
   }

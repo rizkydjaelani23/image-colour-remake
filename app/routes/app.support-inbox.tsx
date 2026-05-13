@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import { useLoaderData, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
 
@@ -30,8 +30,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export default function SupportInboxPage() {
   const { conversations: initial } = useLoaderData<typeof loader>();
+  const [searchParams]                    = useSearchParams();
   const [conversations, setConversations] = useState<Conv[]>(initial);
-  const [activeId, setActiveId]           = useState<string | null>(initial[0]?.id ?? null);
+  // Deep-link: ?conv=<id> from the Google Chat notification button
+  const deepLinkedId = searchParams.get("conv");
+  const defaultId    = deepLinkedId && initial.some((c) => c.id === deepLinkedId)
+    ? deepLinkedId
+    : (initial[0]?.id ?? null);
+  const [activeId, setActiveId]           = useState<string | null>(defaultId);
   const [drafts, setDrafts]               = useState<Record<string, string>>({});
   const [sending, setSending]             = useState<string | null>(null);
   const messagesEndRef                    = useRef<HTMLDivElement>(null);
@@ -108,7 +114,22 @@ export default function SupportInboxPage() {
   });
 
   return (
-    <div style={{ height: "calc(100vh - 56px)", display: "flex", fontFamily: "inherit" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 56px)", fontFamily: "inherit" }}>
+
+      {/* ── How-to banner ── */}
+      <div style={{
+        background: "#fffbeb", borderBottom: "1px solid #fde68a",
+        padding: "10px 20px", fontSize: "13px", color: "#92400e",
+        display: "flex", alignItems: "center", gap: "10px", flexShrink: 0,
+      }}>
+        <span style={{ fontSize: "16px" }}>💡</span>
+        <span>
+          <strong>Reply here, not in Google Chat.</strong> Replies you type below go directly to the merchant's chat widget within a few seconds.
+          Google Chat is for notifications only — typing there won't reach the customer.
+        </span>
+      </div>
+
+    <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
 
       {/* ── Sidebar: conversation list ── */}
       <div style={{
@@ -268,6 +289,7 @@ export default function SupportInboxPage() {
           Select a conversation to view messages
         </div>
       )}
+    </div>
     </div>
   );
 }
