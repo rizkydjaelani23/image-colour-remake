@@ -224,6 +224,10 @@ export default function PreviewManagerPage() {
   const [sortProducts, setSortProducts] = useState<"az" | "za" | "most" | "least">("az");
   const [filterProductStatus, setFilterProductStatus] = useState<"all" | ProductStatus>("all");
   const [filterStorefrontReady, setFilterStorefrontReady] = useState(false);
+  // Bulk product selection (checkboxes in the product list)
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [bulkProductApproving, setBulkProductApproving] = useState(false);
+  const [bulkProductResult, setBulkProductResult] = useState<string | null>(null);
 
   async function loadPreviews(forcedProductId?: string) {
     const idToUse = (forcedProductId || productId).trim();
@@ -305,6 +309,33 @@ export default function PreviewManagerPage() {
     }
     setSelectedIds([]);
     setBatchSaving(false);
+  }
+
+  async function bulkApproveProducts(approve: boolean) {
+    if (selectedProductIds.length === 0) return;
+    setBulkProductApproving(true);
+    setBulkProductResult(null);
+    try {
+      const res = await fetch("/api/bulk-approve-products", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shopifyProductIds: selectedProductIds, approve }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Bulk approve failed");
+      setBulkProductResult(
+        `✅ ${data.count} preview${data.count !== 1 ? "s" : ""} ${approve ? "approved" : "unapproved"} across ${data.productCount} product${data.productCount !== 1 ? "s" : ""}`
+      );
+      setSelectedProductIds([]);
+      // Reload previews for the currently open product if it was affected
+      if (productId && selectedProductIds.includes(productId)) {
+        await loadPreviews();
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Bulk approve failed");
+    } finally {
+      setBulkProductApproving(false);
+    }
   }
 
   async function batchDelete() {
@@ -678,59 +709,129 @@ export default function PreviewManagerPage() {
               })()}
             </div>
 
+            {/* Select-all row + result toast */}
+            {sortedProducts.length > 0 && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "6px", minHeight: "28px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allIds = sortedProducts.map((p) => p.shopifyProductId);
+                      const allChecked = allIds.every((id) => selectedProductIds.includes(id));
+                      setSelectedProductIds(allChecked ? [] : allIds);
+                      setBulkProductResult(null);
+                    }}
+                    style={{ background: "none", border: "none", cursor: "pointer", font: "inherit", fontSize: "12px", fontWeight: 700, color: "#7c3aed", padding: "2px 0", textDecoration: "underline" }}
+                  >
+                    {sortedProducts.every((p) => selectedProductIds.includes(p.shopifyProductId)) && sortedProducts.length > 0
+                      ? "Deselect all"
+                      : `Select all ${sortedProducts.length}`}
+                  </button>
+                  {selectedProductIds.length > 0 && (
+                    <span style={{ fontSize: "12px", color: "#7c3aed", fontWeight: 700 }}>
+                      ({selectedProductIds.length} checked)
+                    </span>
+                  )}
+                </div>
+                {bulkProductResult && (
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 10px", borderRadius: "999px", background: "#f0fdf4", border: "1px solid #bbf7d0", fontSize: "12px", fontWeight: 700, color: "#166534" }}>
+                    {bulkProductResult}
+                    <button type="button" onClick={() => setBulkProductResult(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#166534", fontWeight: 700, fontSize: "13px", padding: 0, lineHeight: 1 }}>✕</button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Scrollable product list */}
             <div style={{ maxHeight: "240px", overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: "12px", background: "#fff" }}>
               {sortedProducts.length === 0 ? (
                 <div style={{ padding: "12px 14px", fontSize: "13px", color: "#94a3b8" }}>No products match &ldquo;{productSearch}&rdquo;</div>
               ) : (
                 sortedProducts.map((product, idx) => {
-                  const isSelected = productId === product.shopifyProductId;
+                  const isSelected  = productId === product.shopifyProductId;
+                  const isChecked   = selectedProductIds.includes(product.shopifyProductId);
                   return (
-                    <button
+                    <div
                       key={product.id}
-                      type="button"
-                      onClick={async () => {
-                        setProductId(product.shopifyProductId);
-                        setProductSearch("");
-                        await loadPreviews(product.shopifyProductId);
-                      }}
                       style={{
-                        width: "100%", display: "flex", alignItems: "center", gap: "10px",
-                        padding: "10px 12px", border: "none",
+                        display: "flex", alignItems: "center",
                         borderBottom: idx < sortedProducts.length - 1 ? "1px solid #f1f5f9" : "none",
-                        background: isSelected ? "#f0f9ff" : "#fff",
-                        cursor: "pointer", textAlign: "left", font: "inherit",
+                        background: isSelected ? "#f0f9ff" : isChecked ? "#faf5ff" : "#fff",
                       }}
                     >
-                      {product.imageUrl && (
-                        <img src={product.imageUrl} alt="" style={{ width: "32px", height: "32px", borderRadius: "6px", objectFit: "cover", flexShrink: 0, border: "1px solid #e5e7eb" }} />
-                      )}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: "13px", fontWeight: isSelected ? 700 : 500, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{product.title || "Untitled product"}</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "2px", flexWrap: "wrap" }}>
-                          <span style={{ fontSize: "11px", color: "#94a3b8" }}>{product.previewCount} preview{product.previewCount !== 1 ? "s" : ""}</span>
-                          {product.status && (
-                            <span style={{
-                              fontSize: "10px", fontWeight: 700, padding: "1px 6px", borderRadius: "999px",
-                              background: product.status === "ACTIVE" ? "#f0fdf4" : product.status === "DRAFT" ? "#fffbeb" : "#f8fafc",
-                              color: product.status === "ACTIVE" ? "#16a34a" : product.status === "DRAFT" ? "#d97706" : "#6b7280",
-                              border: `1px solid ${product.status === "ACTIVE" ? "#bbf7d0" : product.status === "DRAFT" ? "#fde68a" : "#d1d5db"}`,
-                            }}>
-                              {product.status.charAt(0) + product.status.slice(1).toLowerCase()}
-                            </span>
-                          )}
-                          {product.showOnStorefront && product.approvedCount > 0 && (
-                            <span style={{
-                              fontSize: "10px", fontWeight: 700, padding: "1px 6px", borderRadius: "999px",
-                              background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd8fe",
-                            }}>
-                              ✅ {product.approvedCount} live
-                            </span>
-                          )}
+                      {/* ── Clickable main area — loads this product's previews ── */}
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setProductId(product.shopifyProductId);
+                          setProductSearch("");
+                          await loadPreviews(product.shopifyProductId);
+                        }}
+                        style={{
+                          flex: 1, display: "flex", alignItems: "center", gap: "10px",
+                          padding: "10px 12px", border: "none",
+                          background: "transparent",
+                          cursor: "pointer", textAlign: "left", font: "inherit", minWidth: 0,
+                        }}
+                      >
+                        {product.imageUrl && (
+                          <img src={product.imageUrl} alt="" style={{ width: "32px", height: "32px", borderRadius: "6px", objectFit: "cover", flexShrink: 0, border: "1px solid #e5e7eb" }} />
+                        )}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: "13px", fontWeight: isSelected ? 700 : 500, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{product.title || "Untitled product"}</div>
+                          <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "2px", flexWrap: "wrap" }}>
+                            <span style={{ fontSize: "11px", color: "#94a3b8" }}>{product.previewCount} preview{product.previewCount !== 1 ? "s" : ""}</span>
+                            {product.status && (
+                              <span style={{
+                                fontSize: "10px", fontWeight: 700, padding: "1px 6px", borderRadius: "999px",
+                                background: product.status === "ACTIVE" ? "#f0fdf4" : product.status === "DRAFT" ? "#fffbeb" : "#f8fafc",
+                                color: product.status === "ACTIVE" ? "#16a34a" : product.status === "DRAFT" ? "#d97706" : "#6b7280",
+                                border: `1px solid ${product.status === "ACTIVE" ? "#bbf7d0" : product.status === "DRAFT" ? "#fde68a" : "#d1d5db"}`,
+                              }}>
+                                {product.status.charAt(0) + product.status.slice(1).toLowerCase()}
+                              </span>
+                            )}
+                            {product.showOnStorefront && product.approvedCount > 0 && (
+                              <span style={{
+                                fontSize: "10px", fontWeight: 700, padding: "1px 6px", borderRadius: "999px",
+                                background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd8fe",
+                              }}>
+                                ✅ {product.approvedCount} live
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                      {isSelected && <span style={{ color: "#2563eb", fontWeight: 800, fontSize: "13px", flexShrink: 0 }}>✓</span>}
-                    </button>
+                        {isSelected && <span style={{ color: "#2563eb", fontWeight: 800, fontSize: "13px", flexShrink: 0 }}>✓</span>}
+                      </button>
+
+                      {/* ── Checkbox — selects this product for bulk approval ── */}
+                      <button
+                        type="button"
+                        title={isChecked ? "Deselect from bulk action" : "Select for bulk approval"}
+                        onClick={() => {
+                          setBulkProductResult(null);
+                          setSelectedProductIds((prev) =>
+                            prev.includes(product.shopifyProductId)
+                              ? prev.filter((id) => id !== product.shopifyProductId)
+                              : [...prev, product.shopifyProductId]
+                          );
+                        }}
+                        style={{
+                          width: "28px", height: "28px", flexShrink: 0,
+                          marginRight: "10px",
+                          borderRadius: "7px",
+                          border: isChecked ? "2px solid #7c3aed" : "2px solid #d1d5db",
+                          background: isChecked ? "#7c3aed" : "#fff",
+                          color: "#fff", cursor: "pointer",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: "13px", fontWeight: 900,
+                          boxShadow: isChecked ? "0 0 0 3px #ede9fe" : "none",
+                          transition: "border-color 0.15s, background 0.15s, box-shadow 0.15s",
+                        }}
+                      >
+                        {isChecked ? "✓" : ""}
+                      </button>
+                    </div>
                   );
                 })
               )}
@@ -956,7 +1057,57 @@ export default function PreviewManagerPage() {
         <div style={cardStyle}><h2 style={{ marginTop: 0 }}>No previews found</h2><p style={{ marginBottom: 0, color: "#64748b" }}>Create previews in the Visualiser, or upload a real photo above.</p></div>
       )}
 
-      {/* ── Batch action bar ── */}
+      {/* ── Product bulk action bar (purple) — shown when products are checked ── */}
+      {selectedProductIds.length > 0 && (
+        <div
+          style={{
+            position: "sticky", top: "16px", zIndex: 101,
+            marginBottom: "16px", padding: "14px 18px",
+            borderRadius: "16px",
+            background: "linear-gradient(135deg, #4c1d95, #6d28d9)",
+            border: "1px solid #7c3aed",
+            boxShadow: "0 8px 24px rgba(109,40,217,0.35)",
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: "14px", flexWrap: "wrap",
+          }}
+        >
+          <div style={{ color: "#fff", fontWeight: 700, fontSize: "14px", display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{ background: "rgba(255,255,255,0.2)", borderRadius: "999px", padding: "2px 10px", fontSize: "13px" }}>
+              {selectedProductIds.length} product{selectedProductIds.length !== 1 ? "s" : ""} selected
+            </span>
+            <span style={{ color: "rgba(255,255,255,0.65)", fontSize: "13px" }}>
+              Approve or unapprove all their previews at once
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              disabled={bulkProductApproving}
+              onClick={() => bulkApproveProducts(true)}
+              style={{ padding: "8px 18px", borderRadius: "10px", border: "1px solid #4ade80", background: "#22c55e", color: "#fff", cursor: "pointer", font: "inherit", fontWeight: 700, fontSize: "13px", opacity: bulkProductApproving ? 0.7 : 1 }}
+            >
+              {bulkProductApproving ? "Working…" : "✓ Approve all previews"}
+            </button>
+            <button
+              type="button"
+              disabled={bulkProductApproving}
+              onClick={() => bulkApproveProducts(false)}
+              style={{ padding: "8px 18px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.1)", color: "#fff", cursor: "pointer", font: "inherit", fontWeight: 700, fontSize: "13px", opacity: bulkProductApproving ? 0.7 : 1 }}
+            >
+              Unapprove all
+            </button>
+            <button
+              type="button"
+              onClick={() => { setSelectedProductIds([]); setBulkProductResult(null); }}
+              style={{ padding: "8px 14px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "rgba(255,255,255,0.7)", cursor: "pointer", font: "inherit", fontWeight: 700, fontSize: "13px" }}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Colour batch action bar (dark) — shown when individual previews are checked ── */}
       {selectedIds.length > 0 && (
         <div
           style={{
