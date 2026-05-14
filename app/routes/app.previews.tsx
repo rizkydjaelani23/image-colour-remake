@@ -185,6 +185,10 @@ function getStatusPillStyle(active: boolean, activeType: "green" | "blue" = "gre
 export default function PreviewManagerPage() {
   const { productsWithPreviews } = useLoaderData<typeof loader>();
 
+  // Local mutable copy so we can update approved-count badges after bulk actions
+  // without triggering a full page reload.
+  const [localProducts, setLocalProducts] = useState(() => productsWithPreviews);
+
   const [productId, setProductId] = useState("");
   const [productSearch, setProductSearch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -313,22 +317,44 @@ export default function PreviewManagerPage() {
 
   async function bulkApproveProducts(approve: boolean) {
     if (selectedProductIds.length === 0) return;
+    const idsSnapshot = [...selectedProductIds];
     setBulkProductApproving(true);
     setBulkProductResult(null);
     try {
       const res = await fetch("/api/bulk-approve-products", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shopifyProductIds: selectedProductIds, approve }),
+        body: JSON.stringify({ shopifyProductIds: idsSnapshot, approve }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Bulk approve failed");
+
+      // Optimistically update approved-count badges + showOnStorefront in the product list
+      // using the fresh per-product data returned by the API.
+      type ApiProduct = { shopifyProductId: string; approvedCount: number; showOnStorefront: boolean };
+      const apiMap: Record<string, ApiProduct> = {};
+      for (const p of (data.products ?? []) as ApiProduct[]) {
+        apiMap[p.shopifyProductId] = p;
+      }
+      setLocalProducts((prev) =>
+        prev.map((p) => {
+          const updated = apiMap[p.shopifyProductId];
+          if (!updated) return p;
+          return {
+            ...p,
+            approvedCount: updated.approvedCount,
+            showOnStorefront: updated.showOnStorefront,
+          };
+        })
+      );
+
       setBulkProductResult(
         `✅ ${data.count} preview${data.count !== 1 ? "s" : ""} ${approve ? "approved" : "unapproved"} across ${data.productCount} product${data.productCount !== 1 ? "s" : ""}`
       );
       setSelectedProductIds([]);
-      // Reload previews for the currently open product if it was affected
-      if (productId && selectedProductIds.includes(productId)) {
+
+      // Reload the open product's preview grid if it was in the selection
+      if (productId && idsSnapshot.includes(productId)) {
         await loadPreviews();
       }
     } catch (err) {
@@ -524,13 +550,13 @@ export default function PreviewManagerPage() {
 
   const filteredProducts = useMemo(() => {
     const q = productSearch.toLowerCase().trim();
-    return productsWithPreviews.filter((p) => {
+    return localProducts.filter((p) => {
       if (q && !(p.title || "Untitled product").toLowerCase().includes(q)) return false;
       if (filterProductStatus !== "all" && p.status !== filterProductStatus) return false;
       if (filterStorefrontReady && !(p.showOnStorefront && p.approvedCount > 0)) return false;
       return true;
     });
-  }, [productsWithPreviews, productSearch, filterProductStatus, filterStorefrontReady]);
+  }, [localProducts, productSearch, filterProductStatus, filterStorefrontReady]);
 
   const sortedProducts = useMemo(() => {
     const arr = [...filteredProducts];
@@ -554,8 +580,8 @@ export default function PreviewManagerPage() {
   }, [previews, filterStatus, filterStorefront, filterFeatured, sortPreviews]);
 
   const selectedProductSummary = useMemo(
-    () => productsWithPreviews.find((p) => p.shopifyProductId === productId) ?? null,
-    [productsWithPreviews, productId]
+    () => localProducts.find((p) => p.shopifyProductId === productId) ?? null,
+    [localProducts, productId]
   );
 
   async function deletePreview(previewId: string) {
@@ -593,6 +619,18 @@ export default function PreviewManagerPage() {
 
   return (
     <div style={pageStyle}>
+      <style>{`
+        @keyframes bulkProgressFill {
+          0%   { width: 0%; }
+          40%  { width: 60%; }
+          80%  { width: 88%; }
+          100% { width: 94%; }
+        }
+        @keyframes bulkPulse {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.55; }
+        }
+      `}</style>
       {/* ── Hero ── */}
       <div style={heroCardStyle}>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.5fr) minmax(260px, 0.9fr)", gap: "16px", alignItems: "stretch" }}>
@@ -624,7 +662,7 @@ export default function PreviewManagerPage() {
       {/* ── Product picker ── */}
       <div style={{ ...cardStyle, marginBottom: "20px" }}>
         <div style={{ fontSize: "12px", fontWeight: 700, color: "#64748b", marginBottom: "12px" }}>SELECT PRODUCT</div>
-        {productsWithPreviews.length === 0 ? (
+        {localProducts.length === 0 ? (
           <p style={{ margin: 0, color: "#64748b", fontSize: "14px" }}>No previews generated yet. Go to the Visualiser to create your first preview.</p>
         ) : (
           <div>
@@ -646,7 +684,7 @@ export default function PreviewManagerPage() {
             <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
               <input
                 type="search"
-                placeholder={`Search ${productsWithPreviews.length} products…`}
+                placeholder={`Search ${localProducts.length} products…`}
                 value={productSearch}
                 onChange={(e) => setProductSearch(e.target.value)}
                 style={{ ...inputStyle, flex: 1, marginBottom: 0 }}
@@ -675,8 +713,8 @@ export default function PreviewManagerPage() {
                 };
                 const c = colours[s];
                 const count = s === "all"
-                  ? productsWithPreviews.length
-                  : productsWithPreviews.filter((p) => p.status === s).length;
+                  ? localProducts.length
+                  : localProducts.filter((p) => p.status === s).length;
                 return (
                   <button
                     key={s}
@@ -691,7 +729,7 @@ export default function PreviewManagerPage() {
 
               {/* Storefront-ready filter */}
               {(() => {
-                const count = productsWithPreviews.filter((p) => p.showOnStorefront && p.approvedCount > 0).length;
+                const count = localProducts.filter((p) => p.showOnStorefront && p.approvedCount > 0).length;
                 return (
                   <button
                     type="button"
@@ -1062,47 +1100,66 @@ export default function PreviewManagerPage() {
         <div
           style={{
             position: "sticky", top: "16px", zIndex: 101,
-            marginBottom: "16px", padding: "14px 18px",
+            marginBottom: "16px",
             borderRadius: "16px",
             background: "linear-gradient(135deg, #4c1d95, #6d28d9)",
             border: "1px solid #7c3aed",
             boxShadow: "0 8px 24px rgba(109,40,217,0.35)",
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-            gap: "14px", flexWrap: "wrap",
+            overflow: "hidden",
           }}
         >
-          <div style={{ color: "#fff", fontWeight: 700, fontSize: "14px", display: "flex", alignItems: "center", gap: "10px" }}>
-            <span style={{ background: "rgba(255,255,255,0.2)", borderRadius: "999px", padding: "2px 10px", fontSize: "13px" }}>
-              {selectedProductIds.length} product{selectedProductIds.length !== 1 ? "s" : ""} selected
-            </span>
-            <span style={{ color: "rgba(255,255,255,0.65)", fontSize: "13px" }}>
-              Approve or unapprove all their previews at once
-            </span>
-          </div>
-          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              disabled={bulkProductApproving}
-              onClick={() => bulkApproveProducts(true)}
-              style={{ padding: "8px 18px", borderRadius: "10px", border: "1px solid #4ade80", background: "#22c55e", color: "#fff", cursor: "pointer", font: "inherit", fontWeight: 700, fontSize: "13px", opacity: bulkProductApproving ? 0.7 : 1 }}
-            >
-              {bulkProductApproving ? "Working…" : "✓ Approve all previews"}
-            </button>
-            <button
-              type="button"
-              disabled={bulkProductApproving}
-              onClick={() => bulkApproveProducts(false)}
-              style={{ padding: "8px 18px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.1)", color: "#fff", cursor: "pointer", font: "inherit", fontWeight: 700, fontSize: "13px", opacity: bulkProductApproving ? 0.7 : 1 }}
-            >
-              Unapprove all
-            </button>
-            <button
-              type="button"
-              onClick={() => { setSelectedProductIds([]); setBulkProductResult(null); }}
-              style={{ padding: "8px 14px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "rgba(255,255,255,0.7)", cursor: "pointer", font: "inherit", fontWeight: 700, fontSize: "13px" }}
-            >
-              Clear
-            </button>
+          {/* ── Progress bar track (only visible while loading) ── */}
+          {bulkProductApproving && (
+            <div style={{ height: "3px", background: "rgba(255,255,255,0.15)", position: "relative", overflow: "hidden" }}>
+              <div style={{
+                position: "absolute", top: 0, left: 0, height: "100%",
+                background: "linear-gradient(90deg, #4ade80, #86efac)",
+                animation: "bulkProgressFill 2.5s ease-out forwards",
+              }} />
+            </div>
+          )}
+
+          <div style={{ padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "14px", flexWrap: "wrap" }}>
+            <div style={{ color: "#fff", fontWeight: 700, fontSize: "14px", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+              <span style={{ background: "rgba(255,255,255,0.2)", borderRadius: "999px", padding: "2px 10px", fontSize: "13px" }}>
+                {selectedProductIds.length} product{selectedProductIds.length !== 1 ? "s" : ""} selected
+              </span>
+              {bulkProductApproving ? (
+                <span style={{ color: "rgba(255,255,255,0.85)", fontSize: "13px", animation: "bulkPulse 1.2s ease-in-out infinite" }}>
+                  Updating previews &amp; storefront visibility…
+                </span>
+              ) : (
+                <span style={{ color: "rgba(255,255,255,0.65)", fontSize: "13px" }}>
+                  Approves previews + makes gallery visible on storefront
+                </span>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                disabled={bulkProductApproving}
+                onClick={() => bulkApproveProducts(true)}
+                style={{ padding: "8px 18px", borderRadius: "10px", border: "1px solid #4ade80", background: "#22c55e", color: "#fff", cursor: bulkProductApproving ? "not-allowed" : "pointer", font: "inherit", fontWeight: 700, fontSize: "13px", opacity: bulkProductApproving ? 0.6 : 1 }}
+              >
+                {bulkProductApproving ? "Working…" : "✓ Approve all previews"}
+              </button>
+              <button
+                type="button"
+                disabled={bulkProductApproving}
+                onClick={() => bulkApproveProducts(false)}
+                style={{ padding: "8px 18px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.1)", color: "#fff", cursor: bulkProductApproving ? "not-allowed" : "pointer", font: "inherit", fontWeight: 700, fontSize: "13px", opacity: bulkProductApproving ? 0.6 : 1 }}
+              >
+                Unapprove all
+              </button>
+              <button
+                type="button"
+                disabled={bulkProductApproving}
+                onClick={() => { setSelectedProductIds([]); setBulkProductResult(null); }}
+                style={{ padding: "8px 14px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "rgba(255,255,255,0.7)", cursor: bulkProductApproving ? "not-allowed" : "pointer", font: "inherit", fontWeight: 700, fontSize: "13px" }}
+              >
+                Clear
+              </button>
+            </div>
           </div>
         </div>
       )}

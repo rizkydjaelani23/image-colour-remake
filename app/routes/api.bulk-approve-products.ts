@@ -36,14 +36,39 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const productIds = products.map((p) => p.id);
 
+  // Approve / unapprove every preview for the selected products in one DB call
   const result = await prisma.preview.updateMany({
     where: { productId: { in: productIds } },
     data: { approvedForStorefront: approve ?? true },
+  });
+
+  // When approving, also ensure the product-level "Show on storefront" switch is ON
+  // so the gallery actually becomes visible (matches what the per-product toggle does).
+  if (approve ?? true) {
+    await prisma.product.updateMany({
+      where: { id: { in: productIds } },
+      data: { showOnStorefront: true },
+    });
+  }
+
+  // Return fresh per-product counts so the client can update badges without a full reload
+  const updatedProducts = await prisma.product.findMany({
+    where: { id: { in: productIds } },
+    select: {
+      shopifyProductId: true,
+      showOnStorefront: true,
+      previews: { where: { approvedForStorefront: true }, select: { id: true } },
+    },
   });
 
   return Response.json({
     ok: true,
     count: result.count,
     productCount: products.length,
+    products: updatedProducts.map((p) => ({
+      shopifyProductId: p.shopifyProductId,
+      approvedCount: p.previews.length,
+      showOnStorefront: p.showOnStorefront,
+    })),
   });
 }
