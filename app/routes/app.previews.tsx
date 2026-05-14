@@ -231,6 +231,7 @@ export default function PreviewManagerPage() {
   // Bulk product selection (checkboxes in the product list)
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [bulkProductApproving, setBulkProductApproving] = useState(false);
+  const [bulkProductDeleting, setBulkProductDeleting] = useState(false);
   const [bulkProductResult, setBulkProductResult] = useState<string | null>(null);
 
   async function loadPreviews(forcedProductId?: string) {
@@ -361,6 +362,53 @@ export default function PreviewManagerPage() {
       alert(err instanceof Error ? err.message : "Bulk approve failed");
     } finally {
       setBulkProductApproving(false);
+    }
+  }
+
+  async function bulkDeleteProducts() {
+    if (selectedProductIds.length === 0) return;
+    const totalPreviews = localProducts
+      .filter((p) => selectedProductIds.includes(p.shopifyProductId))
+      .reduce((sum, p) => sum + p.previewCount, 0);
+
+    const confirmed = window.confirm(
+      `Permanently delete all ${totalPreviews} preview${totalPreviews !== 1 ? "s" : ""} across ${selectedProductIds.length} product${selectedProductIds.length !== 1 ? "s" : ""}?\n\nThis cannot be undone. The products will also be hidden from your storefront.`
+    );
+    if (!confirmed) return;
+
+    const idsSnapshot = [...selectedProductIds];
+    setBulkProductDeleting(true);
+    setBulkProductResult(null);
+    try {
+      const res = await fetch("/api/bulk-delete-products", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shopifyProductIds: idsSnapshot }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Bulk delete failed");
+
+      // Remove the deleted products from the local list entirely
+      setLocalProducts((prev) =>
+        prev.filter((p) => !idsSnapshot.includes(p.shopifyProductId))
+      );
+
+      // If the currently open product was deleted, clear the preview panel
+      if (productId && idsSnapshot.includes(productId)) {
+        setProductId("");
+        setPreviews([]);
+        setLoadedProduct(null);
+        setSelectedIds([]);
+      }
+
+      setBulkProductResult(
+        `🗑️ ${data.count} preview${data.count !== 1 ? "s" : ""} deleted across ${data.productCount} product${data.productCount !== 1 ? "s" : ""}`
+      );
+      setSelectedProductIds([]);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Bulk delete failed");
+    } finally {
+      setBulkProductDeleting(false);
     }
   }
 
@@ -1109,11 +1157,13 @@ export default function PreviewManagerPage() {
           }}
         >
           {/* ── Progress bar track (only visible while loading) ── */}
-          {bulkProductApproving && (
+          {(bulkProductApproving || bulkProductDeleting) && (
             <div style={{ height: "3px", background: "rgba(255,255,255,0.15)", position: "relative", overflow: "hidden" }}>
               <div style={{
                 position: "absolute", top: 0, left: 0, height: "100%",
-                background: "linear-gradient(90deg, #4ade80, #86efac)",
+                background: bulkProductDeleting
+                  ? "linear-gradient(90deg, #f87171, #fca5a5)"
+                  : "linear-gradient(90deg, #4ade80, #86efac)",
                 animation: "bulkProgressFill 2.5s ease-out forwards",
               }} />
             </div>
@@ -1128,34 +1178,46 @@ export default function PreviewManagerPage() {
                 <span style={{ color: "rgba(255,255,255,0.85)", fontSize: "13px", animation: "bulkPulse 1.2s ease-in-out infinite" }}>
                   Updating previews &amp; storefront visibility…
                 </span>
+              ) : bulkProductDeleting ? (
+                <span style={{ color: "rgba(255,255,255,0.85)", fontSize: "13px", animation: "bulkPulse 1.2s ease-in-out infinite" }}>
+                  Deleting all previews…
+                </span>
               ) : (
                 <span style={{ color: "rgba(255,255,255,0.65)", fontSize: "13px" }}>
-                  Approves previews + makes gallery visible on storefront
+                  Approve, unapprove, or delete all previews at once
                 </span>
               )}
             </div>
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button
                 type="button"
-                disabled={bulkProductApproving}
+                disabled={bulkProductApproving || bulkProductDeleting}
                 onClick={() => bulkApproveProducts(true)}
-                style={{ padding: "8px 18px", borderRadius: "10px", border: "1px solid #4ade80", background: "#22c55e", color: "#fff", cursor: bulkProductApproving ? "not-allowed" : "pointer", font: "inherit", fontWeight: 700, fontSize: "13px", opacity: bulkProductApproving ? 0.6 : 1 }}
+                style={{ padding: "8px 18px", borderRadius: "10px", border: "1px solid #4ade80", background: "#22c55e", color: "#fff", cursor: (bulkProductApproving || bulkProductDeleting) ? "not-allowed" : "pointer", font: "inherit", fontWeight: 700, fontSize: "13px", opacity: (bulkProductApproving || bulkProductDeleting) ? 0.6 : 1 }}
               >
-                {bulkProductApproving ? "Working…" : "✓ Approve all previews"}
+                {bulkProductApproving ? "Working…" : "✓ Approve all"}
               </button>
               <button
                 type="button"
-                disabled={bulkProductApproving}
+                disabled={bulkProductApproving || bulkProductDeleting}
                 onClick={() => bulkApproveProducts(false)}
-                style={{ padding: "8px 18px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.1)", color: "#fff", cursor: bulkProductApproving ? "not-allowed" : "pointer", font: "inherit", fontWeight: 700, fontSize: "13px", opacity: bulkProductApproving ? 0.6 : 1 }}
+                style={{ padding: "8px 18px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.1)", color: "#fff", cursor: (bulkProductApproving || bulkProductDeleting) ? "not-allowed" : "pointer", font: "inherit", fontWeight: 700, fontSize: "13px", opacity: (bulkProductApproving || bulkProductDeleting) ? 0.6 : 1 }}
               >
                 Unapprove all
               </button>
               <button
                 type="button"
-                disabled={bulkProductApproving}
+                disabled={bulkProductApproving || bulkProductDeleting}
+                onClick={() => bulkDeleteProducts()}
+                style={{ padding: "8px 18px", borderRadius: "10px", border: "1px solid #fca5a5", background: "rgba(239,68,68,0.25)", color: "#fca5a5", cursor: (bulkProductApproving || bulkProductDeleting) ? "not-allowed" : "pointer", font: "inherit", fontWeight: 700, fontSize: "13px", opacity: (bulkProductApproving || bulkProductDeleting) ? 0.6 : 1 }}
+              >
+                {bulkProductDeleting ? "Deleting…" : "🗑 Delete all previews"}
+              </button>
+              <button
+                type="button"
+                disabled={bulkProductApproving || bulkProductDeleting}
                 onClick={() => { setSelectedProductIds([]); setBulkProductResult(null); }}
-                style={{ padding: "8px 14px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "rgba(255,255,255,0.7)", cursor: bulkProductApproving ? "not-allowed" : "pointer", font: "inherit", fontWeight: 700, fontSize: "13px" }}
+                style={{ padding: "8px 14px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "rgba(255,255,255,0.7)", cursor: (bulkProductApproving || bulkProductDeleting) ? "not-allowed" : "pointer", font: "inherit", fontWeight: 700, fontSize: "13px" }}
               >
                 Clear
               </button>
