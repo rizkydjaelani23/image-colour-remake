@@ -42,7 +42,6 @@ const COLLECTION_CREATE = `#graphql
         id
         handle
         title
-        onlineStoreUrl
       }
       userErrors {
         field
