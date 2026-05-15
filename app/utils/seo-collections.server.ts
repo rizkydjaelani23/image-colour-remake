@@ -126,8 +126,8 @@ export async function ensureFabricCollections(
               title:       `${name} Furniture`,
               description: `Browse all furniture available in ${name}. Shop our full range of ${name} sofas, beds, chairs and more.`,
             },
-            // Published = live URL. Shopify will NOT add it to navigation automatically.
-            published: true,
+            // Note: collections created via API are published (online store) by default.
+            // There is no "published" field on CollectionInput in the GraphQL API.
           },
         },
       });
