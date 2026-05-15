@@ -64,7 +64,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // ── 2. Build per-product colour lists ────────────────────────────────────
     type ProductRow = {
-      id:               number;
+      id:               string;
       shopifyProductId: string;
       colourNames:      string[];
     };

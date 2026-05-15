@@ -55,7 +55,7 @@ const METAFIELDS_SET_MUTATION = `#graphql
 export async function updateFabricColoursMetafield(
   admin: AdminGraphql,
   shopifyProductId: string,
-  productId: number,
+  productId: string,
 ): Promise<void> {
   try {
     // ── 1. Fetch all approved, visible previews for this product ──────────

@@ -63,7 +63,7 @@ const TAGS_REMOVE = `#graphql
 export async function updateFabricTags(
   admin:            AdminGraphql,
   shopifyProductId: string,
-  productId:        number,
+  productId:        string,
 ): Promise<void> {
   try {
     // ── 1. Desired tags — from approved colours in DB ─────────────────────
@@ -114,7 +114,7 @@ export async function updateFabricTags(
 
 export type TagSyncProduct = {
   shopifyProductId: string;
-  productId:        number;
+  productId:        string;
 };
 
 /**

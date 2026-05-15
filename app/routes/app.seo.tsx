@@ -75,7 +75,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     },
   });
 
-  const fabricMap = new Map<string, { productIds: Set<number>; fabricFamily: string }>();
+  const fabricMap = new Map<string, { productIds: Set<string>; fabricFamily: string }>();
   for (const p of allPreviews) {
     const name = p.customerDisplayName || p.colourName;
     if (!fabricMap.has(name)) {
