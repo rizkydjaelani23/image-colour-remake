@@ -1,5 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 import prisma from "../utils/db.server";
+import { isSeoAddonActive } from "../utils/seo-addon.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
@@ -25,6 +26,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
         handle:            true,
         imageUrl:          true,
         showOnStorefront:  true,
+        // Pull in the shop's SEO add-on status so we can tell gallery.js
+        // whether to render full "{Product} in {Colour}" alt text.
+        shop: { select: { seoAddonActive: true, shopDomain: true } },
       },
     });
 
@@ -39,16 +43,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
     };
 
     if (!product) {
-      return new Response(JSON.stringify({ success: true, product: null, previews: [] }), {
+      return new Response(JSON.stringify({ success: true, product: null, previews: [], seoEnabled: false }), {
         status: 200,
         headers: cacheHeaders,
       });
     }
 
+    // Check SEO add-on for this shop — tells gallery.js whether to use
+    // "{Product} in {Colour}" alt text or just the bare colour name.
+    const seoEnabled = isSeoAddonActive({
+      seoAddonActive: product.shop.seoAddonActive,
+      shopDomain:     product.shop.shopDomain,
+    });
+
     if (!product.showOnStorefront) {
       return new Response(
         JSON.stringify({
           success:  true,
+          seoEnabled,
           product:  {
             id: product.id,
             shopifyProductId: product.shopifyProductId,
@@ -97,6 +109,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return new Response(
       JSON.stringify({
         success: true,
+        seoEnabled,
         product: {
           id: product.id,
           shopifyProductId: product.shopifyProductId,

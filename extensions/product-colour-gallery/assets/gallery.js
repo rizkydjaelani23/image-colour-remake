@@ -120,6 +120,17 @@
     const previews = Array.isArray(data.previews) ? data.previews : [];
     if (!previews.length) { root.innerHTML = ""; return; }
 
+    // SEO add-on: use "{Product Name} in {Colour Name}" as alt text on every
+    // preview image so Google can index fabric colour variations as real text.
+    // Falls back to bare colour name when the add-on is not active.
+    var seoEnabled   = data.seoEnabled === true;
+    var productTitle = (data.product && data.product.title) || "";
+    function seoAlt(colourName) {
+      return seoEnabled && productTitle
+        ? productTitle + " in " + colourName
+        : colourName;
+    }
+
     const grouped = previews.reduce((acc, item) => {
       const family = item.fabricFamily || "General";
       if (!acc[family]) acc[family] = [];
@@ -330,7 +341,7 @@
       };
     }
 
-    function swapMainImage(url, isDeselect) {
+    function swapMainImage(url, isDeselect, colourName) {
       if (isDeselect || !url) {
         if (!_originalMainMedia) return;
         var img = _originalMainMedia.img || getMainProductImage();
@@ -368,6 +379,8 @@
       img.src = shopifyImgUrl(url, 1200);
       img.removeAttribute("srcset");
       img.removeAttribute("sizes");
+      // SEO: label the swapped main image so Google knows which fabric/colour it shows
+      if (seoEnabled && colourName) img.alt = seoAlt(colourName);
     }
 
     // ── colour preview panel (shown inside the gallery, no main image swap) ─
@@ -385,19 +398,19 @@
 
       if (isDeselect || !match) {
         if (existing) existing.remove();
-        if (!showColourPreview()) swapMainImage(null, true); // restore original main image
+        if (!showColourPreview()) swapMainImage(null, true, null); // restore original main image
         return;
       }
 
       if (!showColourPreview()) {
-        swapMainImage(match.imageUrl, false); // swap main image instead of inline panel
+        swapMainImage(match.imageUrl, false, match.colourName); // swap main image instead of inline panel
         return;
       }
 
       if (existing) {
         // Update in-place — no DOM recreation
         const img = existing.querySelector("img");
-        if (img) { img.src = shopifyImgUrl(match.imageUrl, 600); img.alt = escapeHtml(match.colourName); }
+        if (img) { img.src = shopifyImgUrl(match.imageUrl, 600); img.alt = escapeHtml(seoAlt(match.colourName)); }
         const label = existing.querySelector(".pcg-preview-label");
         if (label) label.innerHTML = `<span class="pcg-check">✓</span> ${escapeHtml(match.colourName)}`;
       } else {
@@ -407,7 +420,7 @@
         panel.id = "pcg-colour-preview";
         panel.innerHTML = `
           <img src="${escapeAttr(shopifyImgUrl(match.imageUrl, 600))}"
-               alt="${escapeHtml(match.colourName)}"
+               alt="${escapeHtml(seoAlt(match.colourName))}"
                decoding="async" />
           <div class="pcg-preview-label">
             <span class="pcg-check">✓</span>${escapeHtml(match.colourName)}
@@ -467,7 +480,7 @@
               ${selectedPreview && showColourPreview() ? `
                 <div class="pcg-colour-preview" id="pcg-colour-preview">
                   <img src="${escapeAttr(shopifyImgUrl(selectedPreview.imageUrl, 600))}"
-                       alt="${escapeHtml(selectedPreview.colourName)}"
+                       alt="${escapeHtml(seoAlt(selectedPreview.colourName))}"
                        decoding="async" />
                   <div class="pcg-preview-label">
                     <span class="pcg-check">✓</span>${escapeHtml(selectedPreview.colourName)}
@@ -487,7 +500,7 @@
                           class="pcg-lazy"
                           src=""
                           data-src="${escapeAttr(shopifyImgUrl(item.imageUrl, 120))}"
-                          alt="${escapeHtml(item.colourName)}"
+                          alt="${escapeHtml(seoAlt(item.colourName))}"
                           decoding="async"
                           width="90"
                           height="90"
