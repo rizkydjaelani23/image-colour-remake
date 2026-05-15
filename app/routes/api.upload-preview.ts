@@ -3,6 +3,8 @@ import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
 import { getOrCreateShop } from "../utils/shop.server";
 import { uploadBufferToStorage } from "../utils/storage.server";
+import { isSeoAddonActive } from "../utils/seo-addon.server";
+import { updateFabricColoursMetafield } from "../utils/seo-metafield.server";
 
 /**
  * POST /api/upload-preview
@@ -15,7 +17,7 @@ import { uploadBufferToStorage } from "../utils/storage.server";
  *   customerDisplayName – optional storefront name
  */
 export async function action({ request }: ActionFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = await getOrCreateShop(session.shop);
 
   const formData = await request.formData();
@@ -105,6 +107,12 @@ export async function action({ request }: ActionFunctionArgs) {
       customerDisplayName,
     },
   });
+
+  // ── SEO Engine: update fabric_colours metafield if add-on is active ──
+  // Fire-and-forget: errors are caught inside the utility and never throw.
+  if (isSeoAddonActive(shop)) {
+    void updateFabricColoursMetafield(admin, shopifyProductId, product.id);
+  }
 
   return Response.json({
     success: true,

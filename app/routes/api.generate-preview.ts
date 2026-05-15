@@ -9,6 +9,8 @@ import { uploadBufferToStorage } from "../utils/storage.server";
 import { getCurrentBillingPlan } from "../utils/billing.server";
 import { syncShopUsage } from "../utils/usage.server";
 import { safeFolderName } from "../utils/visualiser.server";
+import { isSeoAddonActive } from "../utils/seo-addon.server";
+import { updateFabricColoursMetafield } from "../utils/seo-metafield.server";
 
 async function tileSwatchToSize(
   swatchBuffer: Buffer,
@@ -763,6 +765,16 @@ if (usage.previewCount >= usage.previewLimit) {
         featured: false,
       },
     });
+
+    // ── SEO Engine: update fabric_colours metafield if add-on is active ──
+    // Fire-and-forget: errors are caught inside the utility and never throw.
+    // Note: newly generated previews start as DRAFT, so the metafield value
+    // won't include this colour until the merchant approves it. This call still
+    // ensures the metafield is kept in sync if a re-generate replaced an
+    // existing approved image.
+    if (isSeoAddonActive(shop)) {
+      void updateFabricColoursMetafield(admin, productId, product.id);
+    }
 
     const limitEnforcement = await prisma.shopUsage.updateMany({
       where: { shopId: shop.id, previewCount: { lt: usage.previewLimit } },

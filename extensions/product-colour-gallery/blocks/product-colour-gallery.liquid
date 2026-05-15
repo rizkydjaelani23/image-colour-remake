@@ -23,6 +23,26 @@
   {{ block.shopify_attributes }}
 ></div>
 
+{%- comment -%}
+  ── Fabric SEO Engine ─────────────────────────────────────────────────────────
+  Visually-hidden link — crawled by Google, invisible to customers.
+  Uses the standard screen-reader clip technique (same as Bootstrap's .sr-only /
+  Tailwind's .sr-only). NOT display:none — Google reads this fully.
+
+  What Google sees:
+    "<product title> — Available fabric colours: Plush Blue, Silver Velvet, ..."
+  all anchored to this product's canonical URL.
+
+  If a customer somehow clicks it they land on the product page — exactly right.
+  Zero merchant action required. Zero visual change on storefront.
+{%- endcomment -%}
+{%- assign pcg_fabric_colours = product.metafields.power_your_house.fabric_colours -%}
+{%- if pcg_fabric_colours != blank -%}
+<div style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;">
+  <a href="{{ product.url }}">{{ product.title }} — {{ pcg_fabric_colours }}</a>
+</div>
+{%- endif -%}
+
 {% schema %}
 {
   "name": "Product colour gallery",
