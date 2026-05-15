@@ -492,7 +492,7 @@ export default function SeoPage() {
             borderRadius: "999px", background: "#eef2ff", border: "1px solid #c7d2fe",
             color: "#4338ca", fontSize: "11px", fontWeight: 700, marginBottom: "16px",
           }}>
-            Add-on — billed separately to your Shopify subscription
+            Available standalone or bundled with Pro
           </div>
 
           {/* Features */}
@@ -515,41 +515,73 @@ export default function SeoPage() {
             ))}
           </div>
 
-          {/* Price + CTA */}
-          <div style={{
-            borderTop: "1px solid #e0e7ff", paddingTop: "20px",
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-            flexWrap: "wrap", gap: "16px",
-          }}>
-            <div>
-              <span style={{ fontSize: "34px", fontWeight: 800, color: "#111827" }}>$14.99</span>
-              <span style={{ fontSize: "14px", color: "#6b7280", marginLeft: "6px" }}>/month</span>
-              <div style={{ fontSize: "12px", color: "#9ca3af", marginTop: "3px" }}>
-                Billed via Shopify · No contract · Cancel any time
+          {/* Pricing options + CTA */}
+          <div style={{ borderTop: "1px solid #e0e7ff", paddingTop: "20px" }}>
+
+            {/* Two plan options */}
+            <div style={{ display: "flex", gap: "12px", marginBottom: "16px", flexWrap: "wrap" }}>
+
+              {/* SEO only */}
+              <div style={{
+                flex: 1, minWidth: "140px", padding: "14px 16px", borderRadius: "12px",
+                border: "1px solid #c7d2fe", background: "#f8faff",
+              }}>
+                <div style={{ fontSize: "11px", color: "#6b7280", fontWeight: 600, marginBottom: "6px" }}>
+                  SEO Engine only
+                </div>
+                <div>
+                  <span style={{ fontSize: "24px", fontWeight: 800, color: "#111827" }}>$14.99</span>
+                  <span style={{ fontSize: "12px", color: "#6b7280", marginLeft: "4px" }}>/mo</span>
+                </div>
+                <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "3px" }}>
+                  Add to your Free plan
+                </div>
+              </div>
+
+              {/* Pro + SEO */}
+              <div style={{
+                flex: 1, minWidth: "140px", padding: "14px 16px", borderRadius: "12px",
+                border: "2px solid #818cf8", background: "#eef2ff",
+              }}>
+                <div style={{ fontSize: "11px", color: "#4338ca", fontWeight: 700, marginBottom: "6px" }}>
+                  ★ Pro + SEO Engine
+                </div>
+                <div>
+                  <span style={{ fontSize: "24px", fontWeight: 800, color: "#111827" }}>$44.99</span>
+                  <span style={{ fontSize: "12px", color: "#6b7280", marginLeft: "4px" }}>/mo</span>
+                </div>
+                <div style={{ fontSize: "11px", color: "#4338ca", fontWeight: 600, marginTop: "3px" }}>
+                  Unlimited previews + SEO
+                </div>
               </div>
             </div>
-            <button
-              type="button"
-              disabled={activatingSeo}
-              onClick={() => void activateSeoAddon()}
-              style={{
-                background: activatingSeo
-                  ? "#e0e7ff"
-                  : "linear-gradient(135deg, #4f46e5, #7c3aed)",
-                color:        activatingSeo ? "#6b7280" : "#fff",
-                border:       "none",
-                borderRadius: "12px",
-                padding:      "14px 28px",
-                fontSize:     "15px",
-                fontWeight:   700,
-                cursor:       activatingSeo ? "not-allowed" : "pointer",
-                boxShadow:    activatingSeo ? "none" : "0 4px 14px rgba(99,102,241,0.35)",
-                whiteSpace:   "nowrap" as const,
-                transition:   "opacity 0.15s",
-              }}
-            >
-              {activatingSeo ? "⏳ Opening Shopify billing…" : "🔍 Activate SEO Engine →"}
-            </button>
+
+            {/* Button + note */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px" }}>
+              <div style={{ fontSize: "12px", color: "#9ca3af" }}>
+                Billed via Shopify · No contract · Cancel any time
+              </div>
+              <button
+                type="button"
+                disabled={activatingSeo}
+                onClick={() => void activateSeoAddon()}
+                style={{
+                  background:   activatingSeo ? "#e0e7ff" : "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                  color:        activatingSeo ? "#6b7280" : "#fff",
+                  border:       "none",
+                  borderRadius: "12px",
+                  padding:      "13px 26px",
+                  fontSize:     "14px",
+                  fontWeight:   700,
+                  cursor:       activatingSeo ? "not-allowed" : "pointer",
+                  boxShadow:    activatingSeo ? "none" : "0 4px 14px rgba(99,102,241,0.35)",
+                  whiteSpace:   "nowrap" as const,
+                  transition:   "opacity 0.15s",
+                }}
+              >
+                {activatingSeo ? "⏳ Opening billing…" : "🔍 Choose a plan →"}
+              </button>
+            </div>
           </div>
         </div>
 

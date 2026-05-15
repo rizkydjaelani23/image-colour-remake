@@ -42,7 +42,11 @@ export default function Plans() {
   const { planName, previewCount, previewLimit, managedPricingUrl } =
     useLoaderData<typeof loader>();
 
-  const isPro = planName !== "Free";
+  const planLower  = planName.toLowerCase();
+  const isPro      = planLower === "pro" || planLower === "pro plan";
+  const isProSeo   = planLower.includes("pro") && planLower.includes("seo");
+  const isSeoOnly  = planLower.includes("seo") && !planLower.includes("pro");
+  const isPaid     = isPro || isProSeo || isSeoOnly;
 
   const [redirectingPlan, setRedirectingPlan] = useState<"free" | "pro" | null>(
     null,
@@ -155,10 +159,10 @@ export default function Plans() {
             style={{
               fontSize: "20px",
               fontWeight: 800,
-              color: isPro ? "#166534" : "#0f172a",
+              color: isPaid ? "#166534" : "#0f172a",
             }}
           >
-            {isPro ? planName : "Free"}
+            {isPaid ? planName : "Free"}
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
@@ -179,7 +183,7 @@ export default function Plans() {
               color: "#0f172a",
             }}
           >
-            {isPro
+            {isPro || isProSeo
               ? `${previewCount} generated`
               : `${previewCount} / ${previewLimit}`}
           </div>
@@ -199,13 +203,13 @@ export default function Plans() {
           style={{
             borderRadius: "20px",
             background: "#ffffff",
-            border: !isPro ? "2px solid #111827" : "1px solid #e5e7eb",
+            border: !isPaid ? "2px solid #111827" : "1px solid #e5e7eb",
             padding: "28px",
             display: "flex",
             flexDirection: "column",
           }}
         >
-          {!isPro && (
+          {!isPaid && (
             <div
               style={{
                 display: "inline-flex",
@@ -304,7 +308,7 @@ export default function Plans() {
             ))}
           </div>
 
-          {!isPro ? (
+          {!isPaid ? (
             <div
               style={{
                 marginTop: "20px",
@@ -523,6 +527,129 @@ export default function Plans() {
                 : "Upgrade to Pro \u2192"}
             </button>
           )}
+        </div>
+      </div>
+
+      {/* SEO Engine add-on plans */}
+      <div style={{ marginTop: "28px" }}>
+        <div style={{ fontSize: "13px", fontWeight: 700, color: "#374151", marginBottom: "4px" }}>
+          🔍 Fabric SEO Engine Add-on
+        </div>
+        <div style={{ fontSize: "13px", color: "#6b7280", marginBottom: "16px" }}>
+          Adds automated SEO collection pages, product tags, metafields &amp; Google Search Console
+          integration. Pick standalone or bundle with Pro.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+
+          {/* SEO only */}
+          <div style={{
+            borderRadius: "16px", background: "#ffffff", padding: "22px",
+            border: isSeoOnly ? "2px solid #111827" : "1px solid #e5e7eb",
+            display: "flex", flexDirection: "column",
+          }}>
+            {isSeoOnly && (
+              <div style={{
+                display: "inline-flex", alignSelf: "flex-start", padding: "4px 12px",
+                borderRadius: "999px", background: "#f0fdf4", border: "1px solid #bbf7d0",
+                color: "#166534", fontSize: "12px", fontWeight: 700, marginBottom: "12px",
+              }}>
+                Current plan
+              </div>
+            )}
+            <div style={{ fontSize: "18px", fontWeight: 800, color: "#0f172a", marginBottom: "4px" }}>
+              SEO Engine
+            </div>
+            <div style={{ marginBottom: "16px" }}>
+              <span style={{ fontSize: "28px", fontWeight: 800, color: "#0f172a" }}>$14.99</span>
+              <span style={{ fontSize: "13px", color: "#64748b", marginLeft: "4px" }}>/month</span>
+            </div>
+            <div style={{ fontSize: "13px", color: "#475569", marginBottom: "16px", lineHeight: 1.5, flex: 1 }}>
+              Add SEO features to your existing Free plan.
+            </div>
+            {isSeoOnly ? (
+              <div style={{
+                padding: "10px", borderRadius: "10px", background: "#f0fdf4",
+                border: "1px solid #bbf7d0", textAlign: "center",
+                fontSize: "13px", fontWeight: 700, color: "#166534",
+              }}>
+                ✓ Active
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleUpgrade}
+                disabled={redirectingPlan === "pro"}
+                style={{
+                  padding: "11px", borderRadius: "10px", background: "#f8fafc",
+                  border: "1px solid #d1d5db", color: "#374151",
+                  fontSize: "13px", fontWeight: 700, cursor: "pointer", width: "100%",
+                }}
+              >
+                {redirectingPlan === "pro" ? "Opening billing…" : "Get SEO Engine →"}
+              </button>
+            )}
+          </div>
+
+          {/* Pro + SEO */}
+          <div style={{
+            borderRadius: "16px", padding: "22px",
+            background: isProSeo ? "#ffffff" : "linear-gradient(135deg, #ffffff 0%, #f8fafc 60%, #eef2ff 100%)",
+            border: isProSeo ? "2px solid #111827" : "2px solid #c7d2fe",
+            display: "flex", flexDirection: "column",
+          }}>
+            {isProSeo ? (
+              <div style={{
+                display: "inline-flex", alignSelf: "flex-start", padding: "4px 12px",
+                borderRadius: "999px", background: "#f0fdf4", border: "1px solid #bbf7d0",
+                color: "#166534", fontSize: "12px", fontWeight: 700, marginBottom: "12px",
+              }}>
+                Current plan
+              </div>
+            ) : (
+              <div style={{
+                display: "inline-flex", alignSelf: "flex-start", padding: "4px 12px",
+                borderRadius: "999px", background: "#eef2ff", border: "1px solid #c7d2fe",
+                color: "#4338ca", fontSize: "12px", fontWeight: 700, marginBottom: "12px",
+              }}>
+                Best value
+              </div>
+            )}
+            <div style={{ fontSize: "18px", fontWeight: 800, color: "#0f172a", marginBottom: "4px" }}>
+              Pro + SEO Engine
+            </div>
+            <div style={{ marginBottom: "16px" }}>
+              <span style={{ fontSize: "28px", fontWeight: 800, color: "#0f172a" }}>$44.99</span>
+              <span style={{ fontSize: "13px", color: "#64748b", marginLeft: "4px" }}>/month</span>
+            </div>
+            <div style={{ fontSize: "13px", color: "#475569", marginBottom: "16px", lineHeight: 1.5, flex: 1 }}>
+              Unlimited previews + all SEO features. Best for growing stores.
+            </div>
+            {isProSeo ? (
+              <div style={{
+                padding: "10px", borderRadius: "10px", background: "#f0fdf4",
+                border: "1px solid #bbf7d0", textAlign: "center",
+                fontSize: "13px", fontWeight: 700, color: "#166534",
+              }}>
+                ✓ Active
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleUpgrade}
+                disabled={redirectingPlan === "pro"}
+                style={{
+                  padding: "11px", borderRadius: "10px",
+                  background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                  border: "none", color: "#fff",
+                  fontSize: "13px", fontWeight: 700, cursor: "pointer", width: "100%",
+                  boxShadow: "0 4px 14px rgba(99,102,241,0.3)",
+                }}
+              >
+                {redirectingPlan === "pro" ? "Opening billing…" : "Get Pro + SEO →"}
+              </button>
+            )}
+          </div>
+
         </div>
       </div>
 
