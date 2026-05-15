@@ -158,11 +158,18 @@ export default function SeoPage() {
   const [disableError, setDisableError] = useState<string | null>(null);
 
   // ── GSC state ─────────────────────────────────────────────────────────────
-  const [gscData, setGscData]           = useState<GscDataMap>(loaderGscData);
-  const [gscRefreshing, setGscRefreshing] = useState(false);
+  const [gscData, setGscData]               = useState<GscDataMap>(loaderGscData);
+  const [gscRefreshing, setGscRefreshing]   = useState(false);
   const [gscRefreshError, setGscRefreshError] = useState<string | null>(null);
-  const [gscCacheAge, setGscCacheAge]   = useState<number | null>(gscCacheAgeMin);
-  const [isConnected, setIsConnected]   = useState(gscConnected);
+  const [gscCacheAge, setGscCacheAge]       = useState<number | null>(gscCacheAgeMin);
+  const [isConnected, setIsConnected]       = useState(gscConnected);
+  const [currentSiteUrl, setCurrentSiteUrl] = useState<string | null>(gscSiteUrl);
+
+  // Site picker state
+  const [showSitePicker, setShowSitePicker] = useState(false);
+  const [sitePickerLoading, setSitePickerLoading] = useState(false);
+  const [availableSites, setAvailableSites] = useState<{ siteUrl: string; permissionLevel: string }[]>([]);
+  const [sitePickerError, setSitePickerError] = useState<string | null>(null);
 
   // Listen for popup postMessage after OAuth callback closes
   useEffect(() => {
@@ -260,6 +267,42 @@ export default function SeoPage() {
       setGscRefreshError(e instanceof Error ? e.message : "An unexpected error occurred");
     } finally {
       setGscRefreshing(false);
+    }
+  }
+
+  async function openSitePicker() {
+    setShowSitePicker(true);
+    setSitePickerError(null);
+    setSitePickerLoading(true);
+    try {
+      const res  = await fetch("/api/gsc-sites");
+      const data = await res.json() as {
+        ok?: boolean;
+        sites?: { siteUrl: string; permissionLevel: string }[];
+        error?: string;
+      };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Could not load sites");
+      setAvailableSites(data.sites ?? []);
+    } catch (e) {
+      setSitePickerError(e instanceof Error ? e.message : "Failed to load sites");
+    } finally {
+      setSitePickerLoading(false);
+    }
+  }
+
+  async function selectSite(siteUrl: string) {
+    try {
+      await fetch("/api/gsc-select-site", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ siteUrl }),
+      });
+      setCurrentSiteUrl(siteUrl);
+      setGscData({});
+      setGscCacheAge(null);
+      setShowSitePicker(false);
+    } catch (e) {
+      setSitePickerError(e instanceof Error ? e.message : "Failed to select site");
     }
   }
 
@@ -559,10 +602,73 @@ export default function SeoPage() {
                   Showing real clicks, impressions &amp; position for each fabric collection page
                   over the last 28 days.
                 </p>
-                {gscSiteUrl && (
-                  <p style={{ fontSize: "11px", color: "#a78bfa", margin: "0 0 12px" }}>
-                    📍 {gscSiteUrl}
-                  </p>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px", flexWrap: "wrap" }}>
+                  {currentSiteUrl && (
+                    <span style={{ fontSize: "11px", color: "#7c3aed", fontWeight: 600 }}>
+                      📍 {currentSiteUrl}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={openSitePicker}
+                    style={{
+                      background: "none", border: "1px solid #c4b5fd", borderRadius: "6px",
+                      padding: "2px 8px", fontSize: "11px", color: "#7c3aed",
+                      cursor: "pointer", fontWeight: 600,
+                    }}
+                  >
+                    {currentSiteUrl ? "Change site" : "Select site"}
+                  </button>
+                </div>
+
+                {/* Site picker panel */}
+                {showSitePicker && (
+                  <div style={{
+                    background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: "10px",
+                    padding: "14px 16px", marginBottom: "12px",
+                  }}>
+                    <div style={{ fontSize: "12px", fontWeight: 700, color: "#4c1d95", marginBottom: "10px" }}>
+                      Select your Search Console property:
+                    </div>
+                    {sitePickerLoading && (
+                      <div style={{ fontSize: "12px", color: "#7c3aed" }}>Loading sites…</div>
+                    )}
+                    {sitePickerError && (
+                      <div style={{ fontSize: "12px", color: "#991b1b" }}>❌ {sitePickerError}</div>
+                    )}
+                    {!sitePickerLoading && availableSites.length === 0 && !sitePickerError && (
+                      <div style={{ fontSize: "12px", color: "#6b7280" }}>No sites found in your GSC account.</div>
+                    )}
+                    {availableSites.map((site) => (
+                      <button
+                        key={site.siteUrl}
+                        type="button"
+                        onClick={() => void selectSite(site.siteUrl)}
+                        style={{
+                          display: "block", width: "100%", textAlign: "left",
+                          background: site.siteUrl === currentSiteUrl ? "#ede9fe" : "#fff",
+                          border: `1px solid ${site.siteUrl === currentSiteUrl ? "#7c3aed" : "#e5e7eb"}`,
+                          borderRadius: "8px", padding: "8px 12px", marginBottom: "6px",
+                          fontSize: "12px", color: "#374151", cursor: "pointer", fontWeight: 500,
+                        }}
+                      >
+                        {site.siteUrl === currentSiteUrl ? "✓ " : ""}{site.siteUrl}
+                        <span style={{ fontSize: "10px", color: "#9ca3af", marginLeft: "8px" }}>
+                          {site.permissionLevel}
+                        </span>
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setShowSitePicker(false)}
+                      style={{
+                        background: "none", border: "none", fontSize: "11px",
+                        color: "#9ca3af", cursor: "pointer", marginTop: "4px",
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 )}
                 {gscCacheAge !== null && (
                   <p style={{ fontSize: "11px", color: "#9ca3af", margin: "0 0 12px" }}>
