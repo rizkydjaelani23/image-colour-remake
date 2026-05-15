@@ -149,6 +149,7 @@ export default function SeoPage() {
     created: number; existing: number; failed: number;
   } | null>(null);
   const [createError, setCreateError]   = useState<string | null>(null);
+  const [createShowError, setCreateShowError] = useState(false);
 
   // ── Disable / cleanup state ───────────────────────────────────────────────
   const [disabling, setDisabling]       = useState(false);
@@ -227,14 +228,18 @@ export default function SeoPage() {
       const res  = await fetch("/api/seo-create-collections", { method: "POST" });
       const data = await res.json() as {
         ok?: boolean; created?: number; existing?: number;
-        failed?: number; error?: string;
+        failed?: number; firstError?: string; error?: string;
+        collections?: Array<{ colourName: string; error?: string }>;
       };
       if (!res.ok || !data.ok) throw new Error(data.error ?? "Collection creation failed");
+      // Surface the first failure reason so we can diagnose
+      const firstError = data.collections?.find((c) => c.error)?.error ?? null;
       setCreateResult({
         created:  data.created  ?? 0,
         existing: data.existing ?? 0,
         failed:   data.failed   ?? 0,
       });
+      if (firstError) setCreateError(`Shopify error: ${firstError}`);
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : "An unexpected error occurred");
     } finally {
@@ -543,17 +548,22 @@ export default function SeoPage() {
             </div>
             {createResult && !creating && (
               <div style={{
-                background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px",
-                padding: "10px 14px", marginBottom: "10px", fontSize: "12px", color: "#166534",
+                background: createResult.failed > 0 ? "#fef2f2" : "#f0fdf4",
+                border: `1px solid ${createResult.failed > 0 ? "#fecaca" : "#bbf7d0"}`,
+                borderRadius: "8px", padding: "10px 14px", marginBottom: "10px",
+                fontSize: "12px", color: createResult.failed > 0 ? "#991b1b" : "#166534",
               }}>
-                ✅ <strong>{createResult.created}</strong> created
-                {createResult.existing > 0 && <> · {createResult.existing} already existed</>}
-                {createResult.failed > 0 && (
-                  <span style={{ color: "#b91c1c" }}> · {createResult.failed} failed</span>
+                {createResult.created > 0 && <>✅ <strong>{createResult.created}</strong> created · </>}
+                {createResult.existing > 0 && <>{createResult.existing} already existed · </>}
+                {createResult.failed > 0 && <strong>{createResult.failed} failed</strong>}
+                {createError && (
+                  <div style={{ marginTop: "6px", fontSize: "11px", opacity: 0.85 }}>
+                    ↳ {createError}
+                  </div>
                 )}
               </div>
             )}
-            {createError && !creating && (
+            {!createResult && createError && !creating && (
               <div style={{
                 background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px",
                 padding: "10px 14px", marginBottom: "10px", fontSize: "12px", color: "#991b1b",
