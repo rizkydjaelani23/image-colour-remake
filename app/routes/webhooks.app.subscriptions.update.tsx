@@ -35,8 +35,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const subPayload = (payload as SubscriptionPayload)?.app_subscription;
   if (!subPayload) return new Response();
 
-  // Only care about our SEO add-on
-  if (subPayload.name !== "Fabric SEO Engine") return new Response();
+  // Only care about plans that include the SEO add-on
+  const SEO_PLANS = ["Fabric SEO Engine", "Pro + SEO Engine"];
+  if (!SEO_PLANS.includes(subPayload.name ?? "")) return new Response();
 
   const isActive = subPayload.status === "active";
 

@@ -10,7 +10,7 @@ import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
 import { getOrCreateShop } from "../utils/shop.server";
-import { isSeoAddonActive } from "../utils/seo-addon.server";
+import { getManagedPricingUrl } from "../utils/billing.server";
 import { colourToSlug, colourToCollectionHandle } from "../utils/colour";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -29,9 +29,48 @@ type GscDataMap = Record<string, GscMetrics>;
 // ── Loader ────────────────────────────────────────────────────────────────────
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
-  const shop        = await getOrCreateShop(session.shop);
-  const seoEnabled  = isSeoAddonActive(shop);
+  const { session, admin } = await authenticate.admin(request);
+  const shop               = await getOrCreateShop(session.shop);
+
+  // ── SEO add-on gate ───────────────────────────────────────────────────────
+  // Dev bypass: SEO_ADDON_DEV=true (scoped to SEO_ADDON_TEST_SHOP if set).
+  // Production: check Shopify activeSubscriptions live so activation and
+  // cancellation are reflected immediately without waiting for a webhook.
+  let seoEnabled = false;
+
+  if (process.env.SEO_ADDON_DEV === "true") {
+    const testShop = process.env.SEO_ADDON_TEST_SHOP;
+    if (!testShop || shop.shopDomain === testShop) seoEnabled = true;
+  }
+
+  if (!seoEnabled) {
+    try {
+      const subRes  = await admin.graphql(
+        `{ currentAppInstallation { activeSubscriptions { name status } } }`,
+      );
+      const subJson = await subRes.json() as {
+        data?: {
+          currentAppInstallation?: {
+            activeSubscriptions?: Array<{ name: string; status: string }>;
+          };
+        };
+      };
+      const subs = subJson?.data?.currentAppInstallation?.activeSubscriptions ?? [];
+      seoEnabled   = subs.some(
+        (s) =>
+          (s.name === "Fabric SEO Engine" || s.name === "Pro + SEO Engine") &&
+          s.status === "ACTIVE",
+      );
+      // Keep DB flag in sync so API route gates (seoAddonGate) reflect current state
+      if (seoEnabled !== shop.seoAddonActive) {
+        await prisma.shop.update({ where: { id: shop.id }, data: { seoAddonActive: seoEnabled } });
+      }
+    } catch {
+      seoEnabled = shop.seoAddonActive; // fall back to last known DB state
+    }
+  }
+
+  const managedPricingUrl = getManagedPricingUrl(session.shop);
 
   if (!seoEnabled) {
     return {
@@ -44,6 +83,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       gscSiteUrl:       null,
       gscCacheAgeMin:   null,
       gscData:          {} as GscDataMap,
+      managedPricingUrl,
     };
   }
 
@@ -119,6 +159,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     gscSiteUrl,
     gscCacheAgeMin,
     gscData,
+    managedPricingUrl,
   };
 }
 
@@ -134,6 +175,7 @@ export default function SeoPage() {
   const {
     seoEnabled, totalProducts, approvedProducts, shopDomain, fabrics,
     gscConnected, gscSiteUrl, gscCacheAgeMin, gscData: loaderGscData,
+    managedPricingUrl,
   } = useLoaderData<typeof loader>();
 
   // ── Sync state ───────────────────────────────────────────────────────────
@@ -353,23 +395,11 @@ export default function SeoPage() {
     }
   }
 
-  async function activateSeoAddon() {
-    if (activatingSeo) return;
+  function activateSeoAddon() {
     setActivatingSeo(true);
-    try {
-      const res  = await fetch("/api/seo-billing-start", { method: "POST" });
-      const data = await res.json() as { confirmationUrl?: string; error?: string };
-      if (!res.ok || !data.confirmationUrl) {
-        alert(data.error ?? "Failed to start billing. Please try again.");
-        return;
-      }
-      // Navigate the top-level frame (outside the iframe) to Shopify's billing approval page
-      (window.top ?? window).location.href = data.confirmationUrl;
-    } catch {
-      alert("Failed to start billing. Please try again.");
-    } finally {
-      setActivatingSeo(false);
-    }
+    // Send the merchant to Shopify's managed pricing page where the
+    // "Fabric SEO Engine" plan is listed alongside Free / Pro.
+    window.open(managedPricingUrl, "_top");
   }
 
   // ── Styles ────────────────────────────────────────────────────────────────

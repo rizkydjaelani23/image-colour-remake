@@ -46,8 +46,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     };
 
     const subs = json?.data?.currentAppInstallation?.activeSubscriptions ?? [];
+    const SEO_PLANS = ["Fabric SEO Engine", "Pro + SEO Engine"];
     const seoSub = subs.find(
-      (s) => s.name === "Fabric SEO Engine" && s.status === "ACTIVE",
+      (s) => SEO_PLANS.includes(s.name) && s.status === "ACTIVE",
     );
 
     if (seoSub) {
