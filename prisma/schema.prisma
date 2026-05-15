@@ -35,6 +35,7 @@ model Shop {
   swatches      Swatch[]
   previews      Preview[]
   conversations SupportConversation[]
+  gscConnection GscConnection?
 }
 
 model Product {
@@ -175,6 +176,21 @@ model SupportMessage {
   conversation SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId])
+}
+
+model GscConnection {
+  id             String    @id @default(cuid())
+  shopId         String    @unique
+  siteUrl        String                        // GSC property URL (e.g. "https://store.com/" or "sc-domain:store.com")
+  accessToken    String    @db.Text
+  refreshToken   String    @db.Text
+  expiresAt      DateTime
+  cachedData     String?   @db.Text            // JSON: Record<collectionHandle, { clicks, impressions, position }>
+  cacheUpdatedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 }
 
 model ShopUsage {

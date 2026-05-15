@@ -4,7 +4,7 @@
  * Phase 3: Sync all products to SEO (metafields + tags)
  * Phase 4: Full fabric index table + Create collection pages
  */
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
@@ -23,6 +23,9 @@ type FabricRow = {
   collectionHandle: string;
 };
 
+type GscMetrics = { clicks: number; impressions: number; position: number };
+type GscDataMap = Record<string, GscMetrics>;
+
 // ── Loader ────────────────────────────────────────────────────────────────────
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -32,11 +35,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   if (!seoEnabled) {
     return {
-      seoEnabled:      false,
-      totalProducts:   0,
+      seoEnabled:       false,
+      totalProducts:    0,
       approvedProducts: 0,
-      shopDomain:      shop.shopDomain,
-      fabrics:         [] as FabricRow[],
+      shopDomain:       shop.shopDomain,
+      fabrics:          [] as FabricRow[],
+      gscConnected:     false,
+      gscSiteUrl:       null,
+      gscCacheAgeMin:   null,
+      gscData:          {} as GscDataMap,
     };
   }
 
@@ -87,12 +94,31 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }))
     .sort((a, b) => b.productCount - a.productCount || a.name.localeCompare(b.name));
 
+  // ── GSC connection ────────────────────────────────────────────────────────
+  const gscConn = await prisma.gscConnection.findUnique({
+    where:  { shopId: shop.id },
+    select: { siteUrl: true, cachedData: true, cacheUpdatedAt: true },
+  });
+
+  const gscConnected    = !!gscConn;
+  const gscSiteUrl      = gscConn?.siteUrl ?? null;
+  const gscCacheAgeMin  = gscConn?.cacheUpdatedAt
+    ? Math.round((Date.now() - gscConn.cacheUpdatedAt.getTime()) / 60_000)
+    : null;
+  const gscData: GscDataMap = gscConn?.cachedData
+    ? (JSON.parse(gscConn.cachedData) as GscDataMap)
+    : {};
+
   return {
     seoEnabled:       true,
     totalProducts,
     approvedProducts,
     shopDomain:       shop.shopDomain,
     fabrics,
+    gscConnected,
+    gscSiteUrl,
+    gscCacheAgeMin,
+    gscData,
   };
 }
 
@@ -105,8 +131,10 @@ function googleSearchUrl(colourName: string) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function SeoPage() {
-  const { seoEnabled, totalProducts, approvedProducts, shopDomain, fabrics } =
-    useLoaderData<typeof loader>();
+  const {
+    seoEnabled, totalProducts, approvedProducts, shopDomain, fabrics,
+    gscConnected, gscSiteUrl, gscCacheAgeMin, gscData: loaderGscData,
+  } = useLoaderData<typeof loader>();
 
   // ── Sync state ───────────────────────────────────────────────────────────
   const [syncing, setSyncing]   = useState(false);
@@ -128,6 +156,25 @@ export default function SeoPage() {
     clearedMetafields: number; clearedTags: number; deletedCollections: number;
   } | null>(null);
   const [disableError, setDisableError] = useState<string | null>(null);
+
+  // ── GSC state ─────────────────────────────────────────────────────────────
+  const [gscData, setGscData]           = useState<GscDataMap>(loaderGscData);
+  const [gscRefreshing, setGscRefreshing] = useState(false);
+  const [gscRefreshError, setGscRefreshError] = useState<string | null>(null);
+  const [gscCacheAge, setGscCacheAge]   = useState<number | null>(gscCacheAgeMin);
+  const [isConnected, setIsConnected]   = useState(gscConnected);
+
+  // Listen for popup postMessage after OAuth callback closes
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      if ((e.data as { gscConnected?: boolean })?.gscConnected) {
+        // Reload to pick up the new GscConnection from loader
+        window.location.reload();
+      }
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
 
   // ── Search filter ─────────────────────────────────────────────────────────
   const [search, setSearch] = useState("");
@@ -185,6 +232,46 @@ export default function SeoPage() {
       setCreateError(e instanceof Error ? e.message : "An unexpected error occurred");
     } finally {
       setCreating(false);
+    }
+  }
+
+  function openGscConnect() {
+    window.open(
+      `/api/gsc-auth-start?shop=${encodeURIComponent(shopDomain)}`,
+      "gsc_oauth",
+      "width=600,height=700,left=200,top=100",
+    );
+  }
+
+  async function refreshGscData() {
+    if (gscRefreshing) return;
+    setGscRefreshError(null);
+    setGscRefreshing(true);
+    try {
+      const res  = await fetch("/api/gsc-refresh-data", { method: "POST" });
+      const data = await res.json() as {
+        ok?: boolean; fromCache?: boolean; cacheAgeMinutes?: number;
+        data?: GscDataMap; error?: string;
+      };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Refresh failed");
+      setGscData(data.data ?? {});
+      setGscCacheAge(data.cacheAgeMinutes ?? 0);
+    } catch (e) {
+      setGscRefreshError(e instanceof Error ? e.message : "An unexpected error occurred");
+    } finally {
+      setGscRefreshing(false);
+    }
+  }
+
+  async function disconnectGsc() {
+    if (!window.confirm("Disconnect Google Search Console? GSC data will no longer show in the table.")) return;
+    try {
+      await fetch("/api/gsc-disconnect", { method: "POST" });
+      setIsConnected(false);
+      setGscData({});
+      setGscCacheAge(null);
+    } catch (e) {
+      console.error("GSC disconnect error:", e);
     }
   }
 
@@ -443,6 +530,127 @@ export default function SeoPage() {
         </div>
       </div>
 
+      {/* ── Google Search Console ── */}
+      <div style={{
+        ...card,
+        borderColor: isConnected ? "#a5b4fc" : "#e5e7eb",
+        background:  isConnected ? "#faf5ff" : "#fff",
+      }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px", flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: "220px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "6px" }}>
+              <span style={{ fontSize: "20px" }}>📊</span>
+              <h2 style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "#374151" }}>
+                Google Search Console
+              </h2>
+              {isConnected && (
+                <span style={{
+                  background: "#7c3aed", color: "#fff", fontSize: "10px",
+                  fontWeight: 700, padding: "2px 8px", borderRadius: "20px",
+                }}>
+                  CONNECTED
+                </span>
+              )}
+            </div>
+
+            {isConnected ? (
+              <>
+                <p style={{ fontSize: "12px", color: "#6b7280", margin: "0 0 4px", lineHeight: 1.5 }}>
+                  Showing real clicks, impressions &amp; position for each fabric collection page
+                  over the last 28 days.
+                </p>
+                {gscSiteUrl && (
+                  <p style={{ fontSize: "11px", color: "#a78bfa", margin: "0 0 12px" }}>
+                    📍 {gscSiteUrl}
+                  </p>
+                )}
+                {gscCacheAge !== null && (
+                  <p style={{ fontSize: "11px", color: "#9ca3af", margin: "0 0 12px" }}>
+                    {gscCacheAge === 0
+                      ? "Just refreshed"
+                      : gscCacheAge < 60
+                      ? `Data from ${gscCacheAge}m ago`
+                      : `Data from ${Math.round(gscCacheAge / 60)}h ago`}
+                    {" · refreshes every 6 hours"}
+                  </p>
+                )}
+                {gscRefreshError && (
+                  <div style={{
+                    background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px",
+                    padding: "8px 12px", marginBottom: "10px", fontSize: "12px", color: "#991b1b",
+                  }}>
+                    ❌ {gscRefreshError}
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    disabled={gscRefreshing}
+                    onClick={refreshGscData}
+                    style={secondaryBtn(gscRefreshing)}
+                  >
+                    {gscRefreshing ? "⏳ Refreshing…" : "🔄 Refresh GSC data"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={disconnectGsc}
+                    style={{
+                      background: "none", color: "#9ca3af", border: "1px solid #e5e7eb",
+                      borderRadius: "10px", padding: "11px 16px", fontSize: "12px",
+                      fontWeight: 600, cursor: "pointer",
+                    }}
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p style={{ fontSize: "12px", color: "#6b7280", margin: "0 0 12px", lineHeight: 1.6 }}>
+                  Connect your Google Search Console account to see real clicks, impressions, and
+                  average ranking position for each fabric collection page — directly in the table below.
+                </p>
+                <button
+                  type="button"
+                  onClick={openGscConnect}
+                  style={primaryBtn()}
+                >
+                  🔗 Connect Google Search Console
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* GSC summary stats — only shown when connected and data exists */}
+          {isConnected && Object.keys(gscData).length > 0 && (() => {
+            const totals = Object.values(gscData).reduce(
+              (acc, d) => ({ clicks: acc.clicks + d.clicks, impressions: acc.impressions + d.impressions }),
+              { clicks: 0, impressions: 0 },
+            );
+            return (
+              <div style={{ display: "flex", gap: "10px", flexShrink: 0 }}>
+                <div style={{ ...statBox, minWidth: "100px", textAlign: "center" }}>
+                  <div style={{ fontSize: "22px", fontWeight: 800, color: "#7c3aed" }}>
+                    {totals.clicks.toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: "10px", color: "#6b7280", fontWeight: 600 }}>
+                    Total clicks (28d)
+                  </div>
+                </div>
+                <div style={{ ...statBox, minWidth: "100px", textAlign: "center" }}>
+                  <div style={{ fontSize: "22px", fontWeight: 800, color: "#0891b2" }}>
+                    {totals.impressions.toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: "10px", color: "#6b7280", fontWeight: 600 }}>
+                    Impressions (28d)
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      </div>
+
       {/* ── Fabric Index Table ── */}
       <div style={card}>
         <div style={{
@@ -478,7 +686,11 @@ export default function SeoPage() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
               <thead>
                 <tr style={{ borderBottom: "2px solid #f1f5f9" }}>
-                  {["Colour", "Family", "Products", "Shopify tag", "Collection URL", ""].map((h) => (
+                  {[
+                    "Colour", "Family", "Products", "Shopify tag", "Collection URL",
+                    ...(isConnected ? ["Clicks (28d)", "Impressions", "Position"] : []),
+                    "",
+                  ].map((h) => (
                     <th key={h} style={{
                       padding: "8px 12px", textAlign: "left", fontSize: "11px",
                       fontWeight: 700, color: "#6b7280", whiteSpace: "nowrap",
@@ -559,6 +771,44 @@ export default function SeoPage() {
                         /collections/{f.collectionHandle} ↗
                       </a>
                     </td>
+
+                    {/* GSC data cells */}
+                    {isConnected && (() => {
+                      const m = gscData[f.collectionHandle];
+                      const numStyle: React.CSSProperties = {
+                        padding: "10px 12px", fontWeight: 700,
+                        fontSize: "13px", textAlign: "right" as const,
+                      };
+                      return (
+                        <>
+                          <td style={numStyle}>
+                            {m ? (
+                              <span style={{ color: m.clicks > 0 ? "#059669" : "#9ca3af" }}>
+                                {m.clicks > 0 ? m.clicks.toLocaleString() : "—"}
+                              </span>
+                            ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                          </td>
+                          <td style={numStyle}>
+                            {m ? (
+                              <span style={{ color: m.impressions > 0 ? "#0891b2" : "#9ca3af" }}>
+                                {m.impressions > 0 ? m.impressions.toLocaleString() : "—"}
+                              </span>
+                            ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                          </td>
+                          <td style={numStyle}>
+                            {m && m.position > 0 ? (
+                              <span style={{
+                                color: m.position <= 3 ? "#059669"
+                                     : m.position <= 10 ? "#d97706"
+                                     : "#6b7280",
+                              }}>
+                                #{m.position}
+                              </span>
+                            ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                          </td>
+                        </>
+                      );
+                    })()}
 
                     {/* Google search */}
                     <td style={{ padding: "10px 12px" }}>
