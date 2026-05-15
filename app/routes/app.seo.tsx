@@ -158,6 +158,9 @@ export default function SeoPage() {
   } | null>(null);
   const [disableError, setDisableError] = useState<string | null>(null);
 
+  // ── Billing state (used by locked upgrade screen) ─────────────────────────
+  const [activatingSeo, setActivatingSeo] = useState(false);
+
   // ── GSC state ─────────────────────────────────────────────────────────────
   const [gscData, setGscData]               = useState<GscDataMap>(loaderGscData);
   const [gscRefreshing, setGscRefreshing]   = useState(false);
@@ -350,6 +353,25 @@ export default function SeoPage() {
     }
   }
 
+  async function activateSeoAddon() {
+    if (activatingSeo) return;
+    setActivatingSeo(true);
+    try {
+      const res  = await fetch("/api/seo-billing-start", { method: "POST" });
+      const data = await res.json() as { confirmationUrl?: string; error?: string };
+      if (!res.ok || !data.confirmationUrl) {
+        alert(data.error ?? "Failed to start billing. Please try again.");
+        return;
+      }
+      // Navigate the top-level frame (outside the iframe) to Shopify's billing approval page
+      (window.top ?? window).location.href = data.confirmationUrl;
+    } catch {
+      alert("Failed to start billing. Please try again.");
+    } finally {
+      setActivatingSeo(false);
+    }
+  }
+
   // ── Styles ────────────────────────────────────────────────────────────────
 
   const card: React.CSSProperties = {
@@ -404,24 +426,125 @@ export default function SeoPage() {
     flexShrink:    0,
   });
 
-  // ── Not active ────────────────────────────────────────────────────────────
+  // ── Not active — upgrade screen ───────────────────────────────────────────
   if (!seoEnabled) {
     return (
-      <div style={{ maxWidth: "720px", margin: "0 auto", padding: "32px 24px" }}>
-        <div style={card}>
-          <div style={{ fontSize: "32px", marginBottom: "12px" }}>🔒</div>
-          <h2 style={{ margin: "0 0 10px", fontSize: "20px", fontWeight: 800, color: "#111827" }}>
-            Fabric SEO Engine
-          </h2>
-          <p style={{ color: "#6b7280", fontSize: "14px", lineHeight: 1.6, margin: "0 0 20px" }}>
-            The Fabric SEO Engine automatically writes your approved colour names to Shopify product
-            metafields, tags products for automated collection pages, and renders SEO alt text on
-            every gallery image — making each colour preview a permanent organic search asset.
-          </p>
-          <p style={{ color: "#6b7280", fontSize: "14px", lineHeight: 1.6, margin: 0 }}>
-            Upgrade your plan to unlock the Fabric SEO Engine.
+      <div style={{ maxWidth: "680px", margin: "0 auto", padding: "32px 24px" }}>
+
+        {/* Header */}
+        <div style={{ marginBottom: "20px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "8px" }}>
+            <span style={{ fontSize: "28px" }}>🔍</span>
+            <h1 style={{ margin: 0, fontSize: "22px", fontWeight: 800, color: "#111827" }}>
+              Fabric SEO Engine
+            </h1>
+            <span style={{
+              background: "#f1f5f9", color: "#64748b", fontSize: "10px",
+              fontWeight: 700, padding: "3px 10px", borderRadius: "20px",
+              letterSpacing: "0.5px",
+            }}>
+              NOT ACTIVE
+            </span>
+          </div>
+          <p style={{ color: "#6b7280", fontSize: "13px", lineHeight: 1.6, margin: 0 }}>
+            Turn every approved colour into a permanent Google search landing page — automatically.
           </p>
         </div>
+
+        {/* Upgrade card */}
+        <div style={{
+          ...card,
+          border: "2px solid #c7d2fe",
+          background: "linear-gradient(135deg, #ffffff 0%, #f8fafc 60%, #eef2ff 100%)",
+        }}>
+          <div style={{
+            display: "inline-flex", alignSelf: "flex-start", padding: "4px 12px",
+            borderRadius: "999px", background: "#eef2ff", border: "1px solid #c7d2fe",
+            color: "#4338ca", fontSize: "11px", fontWeight: 700, marginBottom: "16px",
+          }}>
+            Add-on — billed separately to your Shopify subscription
+          </div>
+
+          {/* Features */}
+          <div style={{ marginBottom: "22px" }}>
+            {[
+              "One SEO collection page per fabric colour (e.g. /collections/fabric-plush-blue)",
+              "Automated Shopify tags — products self-populate into each colour collection",
+              "Colour keywords written to product metafields — Google reads these as rich search text",
+              "SEO-optimised alt text on every colour preview image",
+              "Google Search Console integration — see clicks & rankings per colour in one dashboard",
+              "Fully automatic — every new approved colour is handled instantly, forever",
+            ].map((feature) => (
+              <div key={feature} style={{
+                display: "flex", gap: "10px", marginBottom: "10px",
+                fontSize: "13px", color: "#111827", alignItems: "flex-start",
+              }}>
+                <span style={{ color: "#4338ca", fontWeight: 700, flexShrink: 0, marginTop: "1px" }}>✓</span>
+                <span>{feature}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Price + CTA */}
+          <div style={{
+            borderTop: "1px solid #e0e7ff", paddingTop: "20px",
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            flexWrap: "wrap", gap: "16px",
+          }}>
+            <div>
+              <span style={{ fontSize: "34px", fontWeight: 800, color: "#111827" }}>$14.99</span>
+              <span style={{ fontSize: "14px", color: "#6b7280", marginLeft: "6px" }}>/month</span>
+              <div style={{ fontSize: "12px", color: "#9ca3af", marginTop: "3px" }}>
+                Billed via Shopify · No contract · Cancel any time
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={activatingSeo}
+              onClick={() => void activateSeoAddon()}
+              style={{
+                background: activatingSeo
+                  ? "#e0e7ff"
+                  : "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                color:        activatingSeo ? "#6b7280" : "#fff",
+                border:       "none",
+                borderRadius: "12px",
+                padding:      "14px 28px",
+                fontSize:     "15px",
+                fontWeight:   700,
+                cursor:       activatingSeo ? "not-allowed" : "pointer",
+                boxShadow:    activatingSeo ? "none" : "0 4px 14px rgba(99,102,241,0.35)",
+                whiteSpace:   "nowrap" as const,
+                transition:   "opacity 0.15s",
+              }}
+            >
+              {activatingSeo ? "⏳ Opening Shopify billing…" : "🔍 Activate SEO Engine →"}
+            </button>
+          </div>
+        </div>
+
+        {/* Realistic expectations note */}
+        <div style={{
+          ...card,
+          background: "#fffbeb",
+          border:     "1px solid #fde68a",
+        }}>
+          <div style={{ fontSize: "13px", fontWeight: 700, color: "#92400e", marginBottom: "8px" }}>
+            ⏳ What to expect — read before you activate
+          </div>
+          <div style={{ fontSize: "13px", color: "#78350f", lineHeight: 1.8 }}>
+            The SEO Engine makes your store <strong>correctly set up for organic search</strong> —
+            it does not guarantee rankings or instant results. Google typically takes{" "}
+            <strong>4–12 weeks</strong> to discover and index new collection pages.
+            Results improve gradually over <strong>3–6 months</strong>.
+            You won&apos;t rank for ultra-generic terms like &quot;sofa&quot; where major retailers dominate,
+            but you can realistically rank for specific searches like{" "}
+            <em>&quot;plush blue velvet 3-seater sofa&quot;</em>. The app handles all the technical
+            groundwork — the pace of results depends on your domain&apos;s history and how many other
+            websites link to yours.
+          </div>
+        </div>
+
       </div>
     );
   }
@@ -1005,6 +1128,120 @@ export default function SeoPage() {
               <span style={{ fontSize: "20px", flexShrink: 0 }}>{item.icon}</span>
               <div>
                 <div style={{ fontWeight: 700, fontSize: "13px", color: "#111827", marginBottom: "2px" }}>
+                  {item.title}
+                </div>
+                <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.6 }}>
+                  {item.desc}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Realistic Expectations & FAQ ── */}
+      <div style={card}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "20px" }}>
+          <span style={{ fontSize: "20px" }}>📋</span>
+          <h2 style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "#374151" }}>
+            Realistic Expectations &amp; FAQ
+          </h2>
+        </div>
+
+        {/* What it does */}
+        <div style={{ marginBottom: "22px" }}>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "10px", textTransform: "uppercase" as const, letterSpacing: "0.04em" }}>
+            ✅ What this app does for you
+          </div>
+          {[
+            "Creates a dedicated Shopify collection page for every approved fabric colour — Google can index these pages for colour + product searches",
+            "Tags each product automatically so Shopify populates those collection pages with the right products",
+            "Writes all colour names into a product metafield so Google reads them as keyword-rich product text",
+            "Sets descriptive alt text on every colour preview image (\"Product in Colour\" format)",
+            "All of this happens automatically for every new colour you approve — no manual work needed",
+          ].map((item) => (
+            <div key={item} style={{ display: "flex", gap: "10px", marginBottom: "8px", fontSize: "13px", color: "#374151", alignItems: "flex-start" }}>
+              <span style={{ color: "#059669", fontWeight: 700, flexShrink: 0, marginTop: "1px" }}>✓</span>
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* What it can't do */}
+        <div style={{ marginBottom: "22px" }}>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "10px", textTransform: "uppercase" as const, letterSpacing: "0.04em" }}>
+            ✗ What this app cannot do
+          </div>
+          {[
+            "Guarantee you rank #1 for any keyword — no tool can promise this",
+            "Build backlinks — links from other websites are the #1 ranking factor and cannot be created by software",
+            "Override domain authority — a 10-year-old retailer with thousands of backlinks will outrank a new store on competitive terms, regardless of on-page SEO",
+            "Make you rank for ultra-generic terms like \"sofa\" or \"bed\" — major retailers own these; your wins are specific searches like \"mink chenille corner sofa\"",
+            "Control how fast Google crawls your site — new pages can take weeks to months to appear in results",
+          ].map((item) => (
+            <div key={item} style={{ display: "flex", gap: "10px", marginBottom: "8px", fontSize: "13px", color: "#374151", alignItems: "flex-start" }}>
+              <span style={{ color: "#dc2626", fontWeight: 700, flexShrink: 0, marginTop: "1px" }}>✗</span>
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Timeline */}
+        <div style={{
+          background: "#fffbeb", border: "1px solid #fde68a", borderRadius: "10px",
+          padding: "14px 18px", marginBottom: "22px",
+        }}>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "#92400e", marginBottom: "8px" }}>
+            ⏳ Realistic timeline
+          </div>
+          {[
+            { period: "Weeks 1–4", detail: "Google discovers and crawls your new collection pages. Faster if you submit your sitemap in Google Search Console (Settings → Sitemaps)." },
+            { period: "Months 1–3", detail: "Pages begin appearing in Google's index. You'll see impressions in GSC above with near-zero clicks at first — this is normal." },
+            { period: "Months 3–12", detail: "Positions gradually improve as Google gains confidence in your pages. Clicks increase for specific colour + product searches." },
+            { period: "The honest truth", detail: "SEO is slow. This app ensures you're doing everything right technically — but results depend on your domain age, competition, and how many sites link to yours." },
+          ].map(({ period, detail }) => (
+            <div key={period} style={{ display: "flex", gap: "10px", marginBottom: "7px", fontSize: "12px", color: "#78350f", lineHeight: 1.6 }}>
+              <span style={{ fontWeight: 700, flexShrink: 0, minWidth: "100px" }}>{period}:</span>
+              <span>{detail}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* What merchants can do themselves */}
+        <div>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "#111827", marginBottom: "12px", textTransform: "uppercase" as const, letterSpacing: "0.04em" }}>
+            🚀 What you can do yourself to speed up results
+          </div>
+          {[
+            {
+              title: "Submit your sitemap to Google Search Console",
+              desc:  "In GSC → Sitemaps, add https://yourstore.com/sitemap.xml. This tells Google to crawl now instead of waiting for its next visit — the single most impactful thing you can do after creating collection pages.",
+            },
+            {
+              title: "Write blog posts linking to your colour collections",
+              desc:  "\"Our full range of Plush Blue furniture\" — link to /collections/fabric-plush-blue in the post body. A content page Google already trusts passing a link to your new collection gives it a significant ranking boost.",
+            },
+            {
+              title: "Add collection pages to your store navigation",
+              desc:  "Shopify Admin → Navigation → add your fabric collections to a menu. Every page on your site then passes link equity to the collection, telling Google these pages matter.",
+            },
+            {
+              title: "Target specific searches, not generic ones",
+              desc:  "You won't rank for \"sofa\" — but \"mink chenille 3-seater sofa UK\" or \"plush blue velvet bed frame\" are realistic first-page targets. Specific = less competition = achievable rankings.",
+            },
+            {
+              title: "Get external links (press, directories, reviews)",
+              desc:  "Every external website that links to your store improves your domain authority for everything. Encourage reviews on Trustpilot, Google, Houzz. Reach out to interior design blogs. Even one good link helps.",
+            },
+            {
+              title: "Share collection pages on social media",
+              desc:  "Organic social traffic is a signal Google uses to judge page quality. Share /collections/fabric-plush-blue when you post that colour on Instagram or Pinterest — the traffic counts.",
+            },
+          ].map((item) => (
+            <div key={item.title} style={{ display: "flex", gap: "12px", marginBottom: "16px", alignItems: "flex-start" }}>
+              <span style={{ color: "#4f46e5", fontWeight: 700, fontSize: "15px", flexShrink: 0, marginTop: "1px" }}>→</span>
+              <div>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827", marginBottom: "3px" }}>
                   {item.title}
                 </div>
                 <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.6 }}>

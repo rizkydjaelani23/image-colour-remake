@@ -2,9 +2,9 @@
 
 client_id = "1a5286ed899dfdc56653f2801f2c3b7f"
 name = "Image Colour Remake"
-handle = "image-colour-remake-2"
 application_url = "https://image-colour-remake-production.up.railway.app"
 embedded = true
+handle = "image-colour-remake-2"
 
 [build]
 automatically_update_urls_on_dev = false
@@ -13,12 +13,16 @@ automatically_update_urls_on_dev = false
 api_version = "2026-04"
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/compliance"
-  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
-
-  [[webhooks.subscriptions]]
   topics = [ "app/uninstalled" ]
   uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app_subscriptions/update" ]
+  uri = "/webhooks/app/subscriptions/update"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/compliance"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
