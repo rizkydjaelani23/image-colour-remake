@@ -21,6 +21,13 @@ model Shop {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  // Fabric SEO Engine add-on
+  // seoAddonActive is flipped true by the billing webhook when a merchant pays.
+  // During development, the isSeoAddonActive() utility bypasses this flag via env var.
+  seoAddonActive         Boolean   @default(false)
+  seoAddonSubscriptionId String?   // Shopify subscription GID stored on activation
+  seoAddonActivatedAt    DateTime? // When they first subscribed
+
   usage ShopUsage?
 
   products      Product[]
