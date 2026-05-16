@@ -232,7 +232,15 @@
     }
 
     function getMainProductImage() {
+      // ── 0. Determine the nearest .shopify-section ancestor so every search below
+      //       is scoped to THIS product section only.  This prevents images in
+      //       "Finish the look" / upsell sections (which are separate .shopify-section
+      //       elements) from ever being returned, even if they share the same CSS classes.
+      var productSection = getProductSectionRoot();
+
       // ── 1. Theme-specific selectors (most precise — active/selected states first)
+      //       Search the section root first; fall back to document only when no
+      //       section root could be found (should be extremely rare).
       var selectors = [
         // Active/selected slide states (common sliders)
         ".splide__slide.is-active img",
@@ -279,6 +287,40 @@
         "[data-zoom-image]",
       ];
 
+      // ── Pass A: search within scoped roots (prevents cross-section leakage).
+      // Build an ordered list of candidate section roots to search.
+      // We try the gallery's own .shopify-section first (works when the gallery
+      // app block lives inside the product section), then fall back to other
+      // heuristics for themes that render the gallery as a standalone app embed.
+      var scopedRoots = [
+        productSection,                                                         // gallery's own section
+        document.querySelector('[data-section-type="product"]'),                // explicit product section
+        document.querySelector('[data-section-type="main-product"]'),           // Dawn / OS2.0
+        (function () {
+          // Find a .shopify-section whose id contains "product" but NOT "recommendation"
+          var all = Array.from(document.querySelectorAll(".shopify-section"));
+          return all.find(function (s) {
+            return /product/i.test(s.id) && !/recommend/i.test(s.id) && !/related/i.test(s.id);
+          }) || null;
+        })(),
+      ].filter(Boolean);
+
+      // Deduplicate so we don't search the same element twice
+      var seenA = new Set();
+      for (var r = 0; r < scopedRoots.length; r++) {
+        if (seenA.has(scopedRoots[r])) continue;
+        seenA.add(scopedRoots[r]);
+        for (var i = 0; i < selectors.length; i++) {
+          var images = Array.from(scopedRoots[r].querySelectorAll(selectors[i]));
+          var visible = images.find(isGoodCandidate);
+          if (visible) return visible;
+        }
+      }
+
+      // ── Pass B: document-wide fallback.
+      // All scoped searches failed. Fall back to the original document-wide search.
+      // isGoodCandidate calls isInExcludedSection which filters known upsell patterns.
+      // This ensures we never return null just because scoping rules were too strict.
       for (var i = 0; i < selectors.length; i++) {
         var images = Array.from(document.querySelectorAll(selectors[i]));
         var visible = images.find(isGoodCandidate);
@@ -286,9 +328,9 @@
       }
 
       // ── 2. Broad fallback: largest visible <img> — scoped to our section first
+      // productSection was already resolved above; reuse it here.
       // Never search the whole page; always start from the nearest section ancestor
       // so we don't accidentally pick up images in "Finish the look" / upsell sections.
-      var productSection = getProductSectionRoot();
       var searchRoots = [
         productSection,
         document.querySelector('[data-section-type="product"]'),
