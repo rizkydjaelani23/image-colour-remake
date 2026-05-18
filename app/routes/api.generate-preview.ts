@@ -157,6 +157,7 @@ async function buildRealisticComposite(params: {
   } = params;
 
     const renderMode = getFabricRenderMode(fabricFamily, colourName);
+  const warmFactor = await getSwatchWarmFactor(swatchBuffer);
 
   // Base image detail + lighting
   const maskedLighting = await extractMaskedLighting(
@@ -178,6 +179,7 @@ async function buildRealisticComposite(params: {
         swatchBuffer,
         width,
         height,
+        warmFactor,
       );
     } else if (renderMode === "soft-texture") {
       mainFabricLayer = await createDistanceFabricLayer(
@@ -232,8 +234,10 @@ async function buildRealisticComposite(params: {
           { input: textureLight, blend: "soft-light" },
         ])
         .modulate({
-          brightness: renderMode === "smooth-colour" ? 0.93 : 0.99,  // was 0.88 — pushed up so grey base can't drown the colour
-          saturation: renderMode === "smooth-colour" ? 1.15 : 1.20,  // was 1.06 — strong chroma recovery after soft-light desaturation
+          // Apply warmFactor a second time here (after lighting blend) so bright
+          // reds/oranges don't get re-lifted by the soft-light composite.
+          brightness: (renderMode === "smooth-colour" ? 0.93 : 0.99) * warmFactor,
+          saturation: renderMode === "smooth-colour" ? 1.15 : 1.20,
         })
         .gamma(1.01)
         .png()
@@ -366,6 +370,7 @@ async function createSmoothColourLayer(
   swatchBuffer: Buffer,
   width: number,
   height: number,
+  warmFactor = 1.0,
 ): Promise<Buffer> {
   return sharp(swatchBuffer)
     .resize(width, height, {
@@ -373,11 +378,67 @@ async function createSmoothColourLayer(
     })
     .blur(7)   // was 14 — reduced to preserve swatch texture/pattern
     .modulate({
-      brightness: 0.97,   // lifted — preserve swatch brightness before compositing
-      saturation: 1.15,   // stronger pump so swatch colour comes through clearly
+      brightness: 0.97 * warmFactor,  // dampen vivid warm colours (red/orange) before compositing
+      saturation: 1.15,
     })
     .png()
     .toBuffer();
+}
+
+// ── Warm/bright colour brightness dampening ───────────────────────────────
+// Bright warm colours (red, orange, yellow) can look over-saturated or
+// indistinguishable from each other. We dampen their brightness before
+// compositing so they appear truer to the physical swatch.
+
+function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
+  const rn = r / 255, gn = g / 255, bn = b / 255;
+  const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if      (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6;
+  else if (max === gn) h = ((bn - rn) / d + 2) / 6;
+  else                 h = ((rn - gn) / d + 4) / 6;
+  return { h: h * 360, s, l };
+}
+
+/** Returns a brightness multiplier < 1.0 for vivid warm colours, 1.0 otherwise. */
+function warmBrightnessFactor(h: number, s: number, l: number): number {
+  // Only dampen vivid colours that are bright enough to be affected
+  if (s < 0.45 || l < 0.28) return 1.0;
+
+  // Red: 0–22° and 338–360°
+  if (h <= 22 || h >= 338) return 0.91;
+  // Orange-red: 22–38°  — most likely to look like red, dampen most
+  if (h <= 38)             return 0.87;
+  // Orange: 38–52°
+  if (h <= 52)             return 0.89;
+  // Yellow-orange / yellow: 52–72°
+  if (h <= 72)             return 0.91;
+
+  return 1.0;
+}
+
+/** Sample average RGB from a swatch buffer and return warm brightness factor. */
+async function getSwatchWarmFactor(swatchBuffer: Buffer): Promise<number> {
+  try {
+    const { data } = await sharp(swatchBuffer)
+      .resize(8, 8, { fit: "fill" })
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    let rSum = 0, gSum = 0, bSum = 0;
+    const px = data.length / 3;
+    for (let i = 0; i < data.length; i += 3) {
+      rSum += data[i]; gSum += data[i + 1]; bSum += data[i + 2];
+    }
+    const { h, s, l } = rgbToHsl(rSum / px, gSum / px, bSum / px);
+    return warmBrightnessFactor(h, s, l);
+  } catch {
+    return 1.0;
+  }
 }
 
 function getFabricRenderMode(fabricFamily: string, colourName: string) {
