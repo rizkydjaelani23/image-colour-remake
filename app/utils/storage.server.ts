@@ -1,40 +1,20 @@
-import { supabaseAdmin, PREVIEW_BUCKET } from "./supabase.server";
+// Storage abstraction — backed by Cloudflare R2
+// Drop-in replacement for the previous Supabase storage implementation.
+// All callers (api.upload-preview, api.save-zone, api.generate-preview, etc.)
+// continue to call uploadBufferToStorage / deleteFileFromStorage unchanged.
+
+import { r2Upload, r2Delete } from "./r2.server";
 
 export async function uploadBufferToStorage(params: {
   path: string;
   buffer: Buffer;
   contentType?: string;
-  upsert?: boolean;
+  upsert?: boolean; // kept for API compatibility — R2 always overwrites
 }) {
-  const { path, buffer, contentType = "image/webp", upsert = true } = params;
-
-  const { error } = await supabaseAdmin.storage
-    .from(PREVIEW_BUCKET)
-    .upload(path, buffer, {
-      contentType,
-      upsert,
-    });
-
-  if (error) {
-    throw new Error(`Storage upload failed: ${error.message}`);
-  }
-
-  const { data } = supabaseAdmin.storage
-    .from(PREVIEW_BUCKET)
-    .getPublicUrl(path);
-
-  return {
-    path,
-    publicUrl: data.publicUrl,
-  };
+  const { path, buffer, contentType = "image/webp" } = params;
+  return r2Upload({ path, buffer, contentType });
 }
 
 export async function deleteFileFromStorage(path: string) {
-  const { error } = await supabaseAdmin.storage
-    .from(PREVIEW_BUCKET)
-    .remove([path]);
-
-  if (error) {
-    throw new Error(`Storage delete failed: ${error.message}`);
-  }
+  return r2Delete(path);
 }
