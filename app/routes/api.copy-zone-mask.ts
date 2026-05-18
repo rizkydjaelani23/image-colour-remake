@@ -28,6 +28,9 @@ export async function action({ request }: ActionFunctionArgs) {
     });
 
     if (!sourceZone) {
+      // Debug: check if zone exists at all (ignoring shopId) to diagnose mismatch
+      const zoneExists = await prisma.zone.findUnique({ where: { id: sourceZoneId }, select: { id: true, shopId: true } });
+      console.error(`[copy-zone-mask] Zone not found. sourceZoneId=${sourceZoneId} shopId=${shop.id} shopDomain=${shopDomain} zoneExistsWithDifferentShop=${JSON.stringify(zoneExists)}`);
       return Response.json({ error: "Source zone not found" }, { status: 404 });
     }
 
