@@ -14,6 +14,7 @@ type ShopifyProductSummary = {
   status: ProductStatus;
   image: string | null;
   rank: number; // best-selling position (1 = top seller)
+  collections: Array<{ id: string; title: string }>;
 };
 
 type SavedMaskEntry = {
@@ -92,6 +93,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
                 title
                 status
                 featuredImage { url }
+                collections(first: 10) {
+                  edges { node { id title } }
+                }
               }
             }
           }
@@ -103,7 +107,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
         data?: {
           products?: {
             pageInfo: { hasNextPage: boolean; endCursor: string | null };
-            edges?: Array<{ node: { id: string; title: string; status: string; featuredImage: { url: string } | null } }>;
+            edges?: Array<{
+              node: {
+                id: string;
+                title: string;
+                status: string;
+                featuredImage: { url: string } | null;
+                collections: { edges: Array<{ node: { id: string; title: string } }> };
+              };
+            }>;
           };
         };
       };
@@ -118,6 +130,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           status: e.node.status as ProductStatus,
           image: e.node.featuredImage?.url ?? null,
           rank: 0, // unused — kept for type compatibility
+          collections: (e.node.collections?.edges ?? []).map((ce) => ({ id: ce.node.id, title: ce.node.title })),
         });
       }
 
@@ -172,19 +185,48 @@ export default function VisualiserPage() {
   const [showProductPicker, setShowProductPicker] = useState(false);
   const [pickerSearch, setPickerSearch] = useState("");
   const [pickerStatusFilter, setPickerStatusFilter] = useState<"ALL" | ProductStatus>("ALL");
+  const [pickerCollectionFilter, setPickerCollectionFilter] = useState<string>("ALL");
 
   const previewManagerSet = useMemo(() => new Set(previewManagerIds), [previewManagerIds]);
+
+  // Sorted unique collection list across all products
+  const pickerCollections = useMemo(() => {
+    const seen = new Map<string, string>(); // id → title
+    for (const p of allProducts) {
+      for (const c of p.collections) {
+        if (!seen.has(c.id)) seen.set(c.id, c.title);
+      }
+    }
+    return Array.from(seen.entries())
+      .map(([id, title]) => ({ id, title }))
+      .sort((a, b) => a.title.localeCompare(b.title));
+  }, [allProducts]);
+
+  // Set of lowercase titles that appear more than once (duplicates)
+  const duplicateTitleSet = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of allProducts) {
+      const key = p.title.trim().toLowerCase();
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const dupes = new Set<string>();
+    for (const [key, count] of counts) {
+      if (count > 1) dupes.add(key);
+    }
+    return dupes;
+  }, [allProducts]);
 
   const filteredPickerProducts = useMemo(() => {
     return allProducts.filter((p) => {
       if (pickerStatusFilter !== "ALL" && p.status !== pickerStatusFilter) return false;
+      if (pickerCollectionFilter !== "ALL" && !p.collections.some((c) => c.id === pickerCollectionFilter)) return false;
       if (pickerSearch.trim()) {
         const q = pickerSearch.trim().toLowerCase();
         if (!p.title.toLowerCase().includes(q)) return false;
       }
       return true;
     });
-  }, [allProducts, pickerSearch, pickerStatusFilter]);
+  }, [allProducts, pickerSearch, pickerStatusFilter, pickerCollectionFilter]);
 
   const pickerStatusCounts = useMemo(() => {
     const counts = { ALL: allProducts.length, ACTIVE: 0, DRAFT: 0, ARCHIVED: 0 };
@@ -1485,6 +1527,30 @@ const stepTextStyle: CSSProperties = {
                   })}
                 </div>
 
+                {/* collection filter */}
+                {pickerCollections.length > 0 && (
+                  <div style={{ padding: "8px 14px", borderBottom: "1px solid #f0f0f0" }}>
+                    <select
+                      value={pickerCollectionFilter}
+                      onChange={(e) => setPickerCollectionFilter(e.target.value)}
+                      style={{
+                        width: "100%", boxSizing: "border-box",
+                        padding: "7px 10px", borderRadius: "8px",
+                        border: "1px solid #d1d5db", fontSize: "13px",
+                        background: pickerCollectionFilter !== "ALL" ? "#eef2ff" : "#fff",
+                        color: pickerCollectionFilter !== "ALL" ? "#4338ca" : "#374151",
+                        fontWeight: pickerCollectionFilter !== "ALL" ? 600 : 400,
+                        cursor: "pointer", outline: "none",
+                      }}
+                    >
+                      <option value="ALL">All collections</option>
+                      {pickerCollections.map((c) => (
+                        <option key={c.id} value={c.id}>{c.title}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 {/* product list */}
                 <div style={{ maxHeight: "340px", overflowY: "auto" }}>
                   {filteredPickerProducts.length === 0 ? (
@@ -1492,6 +1558,7 @@ const stepTextStyle: CSSProperties = {
                   ) : (
                     filteredPickerProducts.map((p) => {
                       const inManager = previewManagerSet.has(p.id);
+                      const isDuplicate = duplicateTitleSet.has(p.title.trim().toLowerCase());
                       const statusColour: Record<ProductStatus, { bg: string; text: string }> = {
                         ACTIVE:   { bg: "#dcfce7", text: "#166534" },
                         DRAFT:    { bg: "#fef9c3", text: "#854d0e" },
@@ -1530,6 +1597,18 @@ const stepTextStyle: CSSProperties = {
                               <span style={{ fontSize: "11px", fontWeight: 500, padding: "1px 6px", borderRadius: "999px", background: "#f3f4f6", color: "#6b7280", border: "1px solid #e5e7eb", fontFamily: "monospace" }}>
                                 ID {p.id.replace("gid://shopify/Product/", "")}
                               </span>
+                              {/* Collection chips */}
+                              {p.collections.map((c) => (
+                                <span key={c.id} style={{ fontSize: "11px", fontWeight: 500, padding: "1px 6px", borderRadius: "999px", background: "#f0f9ff", color: "#0369a1", border: "1px solid #bae6fd" }}>
+                                  {c.title}
+                                </span>
+                              ))}
+                              {/* Duplicate name warning */}
+                              {isDuplicate && (
+                                <span style={{ fontSize: "11px", fontWeight: 700, padding: "1px 6px", borderRadius: "999px", background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa" }}>
+                                  ⚠ Duplicate name
+                                </span>
+                              )}
                               {inManager && (
                                 <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "999px", background: "#ede9fe", color: "#6d28d9" }}>
                                   in preview manager
