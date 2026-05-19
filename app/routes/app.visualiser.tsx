@@ -349,11 +349,14 @@ export default function VisualiserPage() {
     setSwatchSource(null);
     setZoom(1);
     setPan({ x: 0, y: 0 });
+    // ── Reset bulk state — server-side jobs keep running, UI is clean ───────
+    setBulkJobIds([]);          // stops the bulk polling effect
     setBulkJobResultMap(new Map());
-    setBulkJobIds([]);
     setBulkJobDoneCount(0);
     bulkResolvedRef.current = new Set();
+    setBulkPreviewLoading(false); // ← unblocks the generate button on new product
     setBulkPreviewError(null);
+    setSelectedBulkIndex(null);
     setBulkSwatchFiles([]);
     setSelectedRecentSwatchIds([]);
     setGenerationNotice(null);
@@ -363,7 +366,7 @@ export default function VisualiserPage() {
     setBulkUploadMode("files");
     setFolderSwatchJobs([]);
     setImageLoaded(false);
-    // Clear job tracking for the previous product (job keeps running server-side)
+    // ── Reset single-preview job tracking ────────────────────────────────────
     setActiveJobId(null);
     setActiveJobProductId(null);
     setActiveJobProgress(0);
@@ -938,9 +941,10 @@ export default function VisualiserPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeJobId]); // ← intentionally omit activeJobProductId/status — captured in closure
 
-  // ── Poll shop-wide active jobs (for product picker badges) ────────────────
+  // ── Poll shop-wide active jobs (badges + global background banner) ─────────
+  // Runs always (not just when picker is open) so the floating banner can
+  // show background jobs even after the user switches to a different product.
   useEffect(() => {
-    if (!showProductPicker) return;
     let mounted = true;
 
     const fetchJobCounts = async () => {
@@ -960,7 +964,7 @@ export default function VisualiserPage() {
     fetchJobCounts();
     const interval = setInterval(fetchJobCounts, 5000);
     return () => { mounted = false; clearInterval(interval); };
-  }, [showProductPicker]);
+  }, []); // runs once on mount — always active
 
   // ── Poll bulk generation jobs ─────────────────────────────────────────────
   useEffect(() => {
@@ -1489,51 +1493,82 @@ const stepTextStyle: CSSProperties = {
       `}</style>
 
       {/* ── Floating "generating in background" banner ───────────────────── */}
-      {(bulkJobIds.length > 0 && bulkPreviewLoading) || (activeJobId && activeJobStatus !== "DONE" && activeJobStatus !== "FAILED") ? (
-        <div style={{
-          position: "fixed",
-          bottom: "24px",
-          right: "24px",
-          zIndex: 9999,
-          background: "#1e1b4b",
-          color: "#fff",
-          borderRadius: "12px",
-          padding: "14px 18px",
-          boxShadow: "0 4px 24px rgba(0,0,0,0.28)",
-          minWidth: "260px",
-          maxWidth: "340px",
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <div style={{
-              width: "10px", height: "10px", borderRadius: "50%", background: "#818cf8", flexShrink: 0,
-              animation: "pulse 1.5s infinite",
-            }} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: "13px" }}>
-                {bulkJobIds.length > 0 && bulkPreviewLoading
-                  ? `Bulk generating… ${bulkJobDoneCount} / ${bulkJobIds.length} done`
-                  : activeJobStatus === "PROCESSING"
-                  ? `Generating colour preview… ${activeJobProgress}%`
-                  : "Preview queued…"}
-              </div>
-              <div style={{ fontSize: "11px", color: "#a5b4fc", marginTop: "3px" }}>
-                You can keep working while this finishes
+      {(() => {
+        // Show if this product has an active single job
+        const hasSingleJob = !!(activeJobId && activeJobStatus !== "DONE" && activeJobStatus !== "FAILED");
+        // Show if a bulk run is in progress for this product
+        const hasBulkJob   = bulkJobIds.length > 0 && bulkPreviewLoading;
+        // Show if other products have background jobs (after a product switch)
+        const shopBgTotal  = Array.from(shopJobMap.values()).reduce((s, n) => s + n, 0);
+        // Exclude jobs already tracked by bulkJobIds / activeJobId to avoid double-counting
+        const trackedCount = (hasBulkJob ? bulkJobIds.length : 0) + (hasSingleJob ? 1 : 0);
+        const hasBgOther   = shopBgTotal > trackedCount;
+
+        if (!hasSingleJob && !hasBulkJob && !hasBgOther) return null;
+
+        const label = hasBulkJob
+          ? `Bulk generating… ${bulkJobDoneCount} / ${bulkJobIds.length} done`
+          : hasSingleJob
+          ? (activeJobStatus === "PROCESSING"
+              ? `Generating colour preview… ${activeJobProgress}%`
+              : "Preview queued…")
+          : `${shopBgTotal} colour preview${shopBgTotal === 1 ? "" : "s"} generating in background`;
+
+        const progressPct = hasBulkJob
+          ? Math.round((bulkJobDoneCount / bulkJobIds.length) * 100)
+          : hasSingleJob
+          ? activeJobProgress
+          : null; // indeterminate for background-only
+
+        return (
+          <div style={{
+            position: "fixed",
+            bottom: "24px",
+            right: "24px",
+            zIndex: 9999,
+            background: "#1e1b4b",
+            color: "#fff",
+            borderRadius: "12px",
+            padding: "14px 18px",
+            boxShadow: "0 4px 24px rgba(0,0,0,0.28)",
+            minWidth: "260px",
+            maxWidth: "340px",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <div style={{
+                width: "10px", height: "10px", borderRadius: "50%", background: "#818cf8", flexShrink: 0,
+                animation: "pulse 1.5s infinite",
+              }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: "13px" }}>{label}</div>
+                <div style={{ fontSize: "11px", color: "#a5b4fc", marginTop: "3px" }}>
+                  You can keep working while this finishes
+                </div>
               </div>
             </div>
+            {/* Progress bar — hidden when indeterminate (other-product background) */}
+            {progressPct !== null && (
+              <div style={{ marginTop: "10px", borderRadius: "4px", background: "rgba(255,255,255,0.15)", height: "5px", overflow: "hidden" }}>
+                <div style={{
+                  height: "100%",
+                  width: `${progressPct}%`,
+                  background: "#818cf8",
+                  transition: "width 0.5s ease",
+                }} />
+              </div>
+            )}
+            {progressPct === null && (
+              <div style={{ marginTop: "10px", borderRadius: "4px", background: "rgba(255,255,255,0.15)", height: "5px", overflow: "hidden" }}>
+                <div style={{
+                  height: "100%", width: "40%", background: "#818cf8",
+                  animation: "spin 1.4s linear infinite",
+                  transformOrigin: "left center",
+                }} />
+              </div>
+            )}
           </div>
-          {/* Progress bar */}
-          <div style={{ marginTop: "10px", borderRadius: "4px", background: "rgba(255,255,255,0.15)", height: "5px", overflow: "hidden" }}>
-            <div style={{
-              height: "100%",
-              width: bulkJobIds.length > 0
-                ? `${Math.round((bulkJobDoneCount / bulkJobIds.length) * 100)}%`
-                : `${activeJobProgress}%`,
-              background: "#818cf8",
-              transition: "width 0.5s ease",
-            }} />
-          </div>
-        </div>
-      ) : null}
+        );
+      })()}
 
       <div style={{ marginBottom: "24px" }}>
         <h1 style={{ marginBottom: "8px" }}>Product Setup</h1>
