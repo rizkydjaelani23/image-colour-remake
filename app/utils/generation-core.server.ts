@@ -212,7 +212,7 @@ async function extractMaskedLighting(
     .composite([{ input: greyMask, blend: "multiply" }])
     .greyscale()
     .normalise()
-    .blur(1)
+    .blur(3)   // increased from 1 — smooths tufting shadows into a gentle gradient
     .png()
     .toBuffer();
 }
@@ -402,7 +402,11 @@ export async function buildRealisticComposite(params: {
   }
 
   const maskedLightingForBlend = renderMode === "smooth-colour"
-    ? await sharp(maskedLighting).linear(0.55, 58).png().toBuffer()
+    // Reduced from linear(0.55, 58) — that was mapping lighting to a 140-value range
+    // in soft-light, creating strong blotchy patches from tufting shadows/highlights.
+    // Now maps to a 50-value range near neutral (128), preserving gentle depth
+    // without the uneven patches.
+    ? await sharp(maskedLighting).linear(0.20, 108).png().toBuffer()
     : maskedLighting;
 
   const compositeInputs: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [
@@ -415,8 +419,8 @@ export async function buildRealisticComposite(params: {
   const colouredFabric = await sharp(mainFabricLayer)
     .composite(compositeInputs)
     .modulate({
-      brightness: (renderMode === "smooth-colour" ? 0.87 : 0.91) * warmFactor, // was 0.93 / 0.99
-      saturation: renderMode === "smooth-colour" ? 1.05 : 1.08,                // was 1.15 / 1.20
+      brightness: (renderMode === "smooth-colour" ? 0.90 : 0.91) * warmFactor, // was 0.87 — less dark
+      saturation: renderMode === "smooth-colour" ? 1.02 : 1.08,                // was 1.05 — slightly less punchy
     })
     .gamma(1.01)
     .png()
