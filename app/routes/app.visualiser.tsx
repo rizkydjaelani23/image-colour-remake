@@ -268,12 +268,7 @@ export default function VisualiserPage() {
   const [bulkPreviewLoading, setBulkPreviewLoading] = useState(false);
   const [bulkPreviewError, setBulkPreviewError] = useState<string | null>(null);
   const [selectedBulkIndex, setSelectedBulkIndex] = useState<number | null>(null);
-  const [bulkPreviewResults, setBulkPreviewResults] = useState<
-    Array<{
-      fileName: string;
-      previewUrl: string;
-    }>
-  >([]);
+  // bulkPreviewResults is now derived from bulkJobResultMap (see useMemo above)
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [generatedPreviewUrl, setGeneratedPreviewUrl] = useState<string | null>(null);
@@ -297,14 +292,34 @@ export default function VisualiserPage() {
   const [maskLibraryCopying, setMaskLibraryCopying] = useState(false);
   const [maskLibrarySearch, setMaskLibrarySearch] = useState("");
 
-  // ── Background generation job tracking ───────────────────────────────────
-  const [activeJobId, setActiveJobId]             = useState<string | null>(null);
+  // ── Background generation job tracking (single preview) ─────────────────
+  const [activeJobId, setActiveJobId]               = useState<string | null>(null);
   /** Shopify product GID that this job belongs to — guards against stale results on wrong product */
   const [activeJobProductId, setActiveJobProductId] = useState<string | null>(null);
-  const [activeJobProgress, setActiveJobProgress] = useState(0);
-  const [activeJobStatus, setActiveJobStatus]     = useState<"PENDING" | "PROCESSING" | "DONE" | "FAILED" | null>(null);
+  const [activeJobProgress, setActiveJobProgress]   = useState(0);
+  const [activeJobStatus, setActiveJobStatus]       = useState<"PENDING" | "PROCESSING" | "DONE" | "FAILED" | null>(null);
+
+  // ── Bulk generation job tracking ─────────────────────────────────────────
+  /** All job IDs submitted in the current bulk run */
+  const [bulkJobIds, setBulkJobIds]               = useState<string[]>([]);
+  /** jobId → { colourName, previewUrl } for completed bulk jobs */
+  const [bulkJobResultMap, setBulkJobResultMap]   = useState<Map<string, { colourName: string; previewUrl: string }>>(new Map());
+  /** How many bulk jobs have finished (DONE or FAILED) */
+  const [bulkJobDoneCount, setBulkJobDoneCount]   = useState(0);
+  /** Set of jobIds we have already resolved — avoids double-counting */
+  const bulkResolvedRef = useRef<Set<string>>(new Set());
+
   /** shopifyProductId → number of active (PENDING/PROCESSING) jobs */
   const [shopJobMap, setShopJobMap] = useState<Map<string, number>>(new Map());
+
+  // Keep bulkPreviewResults in sync with the live job result map so the
+  // existing lightbox navigation code keeps working unchanged.
+  const bulkPreviewResults = useMemo(() => {
+    return Array.from(bulkJobResultMap.values()).map((v) => ({
+      fileName: v.colourName,
+      previewUrl: v.previewUrl,
+    }));
+  }, [bulkJobResultMap]);
 
   const imageRef = useRef<HTMLImageElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -334,7 +349,10 @@ export default function VisualiserPage() {
     setSwatchSource(null);
     setZoom(1);
     setPan({ x: 0, y: 0 });
-    setBulkPreviewResults([]);
+    setBulkJobResultMap(new Map());
+    setBulkJobIds([]);
+    setBulkJobDoneCount(0);
+    bulkResolvedRef.current = new Set();
     setBulkPreviewError(null);
     setBulkSwatchFiles([]);
     setSelectedRecentSwatchIds([]);
@@ -944,6 +962,63 @@ export default function VisualiserPage() {
     return () => { mounted = false; clearInterval(interval); };
   }, [showProductPicker]);
 
+  // ── Poll bulk generation jobs ─────────────────────────────────────────────
+  useEffect(() => {
+    if (bulkJobIds.length === 0) return;
+
+    let mounted = true;
+    // Work on a local copy so we don't re-trigger this effect when resolvedRef changes
+    const resolved = bulkResolvedRef.current;
+
+    const pollBulk = async () => {
+      // Collect IDs that still need a result
+      const pending = bulkJobIds.filter((id) => !resolved.has(id));
+      if (pending.length === 0) return;
+
+      await Promise.all(
+        pending.map(async (jobId) => {
+          try {
+            const res = await fetch(`/api/job-status?jobId=${encodeURIComponent(jobId)}`);
+            if (!res.ok || !mounted) return;
+            const { job } = await res.json() as {
+              job?: { status: string; progress: number; previewUrl?: string; colourName?: string; fabricFamily?: string; errorMessage?: string };
+            };
+            if (!job || !mounted) return;
+
+            if (job.status === "DONE" || job.status === "FAILED") {
+              resolved.add(jobId);
+              setBulkJobDoneCount((n) => n + 1);
+              if (job.status === "DONE" && job.previewUrl) {
+                setBulkJobResultMap((prev) => {
+                  const next = new Map(prev);
+                  next.set(jobId, {
+                    colourName: job.colourName ?? job.fabricFamily ?? jobId,
+                    previewUrl: job.previewUrl!,
+                  });
+                  return next;
+                });
+              }
+            }
+          } catch { /* ignore transient errors */ }
+        })
+      );
+
+      // If all resolved, stop polling and clean up loading state
+      if (resolved.size >= bulkJobIds.length && mounted) {
+        setBulkPreviewLoading(false);
+        setGenerationNotice("Preview generation finished. Review completed images in the Preview Manager.");
+        loadRecentSwatches();
+        setSelectedRecentSwatchIds([]);
+        setFolderSwatchJobs([]);
+      }
+    };
+
+    pollBulk();
+    const interval = setInterval(pollBulk, 3000);
+    return () => { mounted = false; clearInterval(interval); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bulkJobIds]);
+
   function toggleRecentSwatch(swatchId: string) {
     setSelectedRecentSwatchIds((prev) => {
       if (prev.includes(swatchId)) {
@@ -1078,100 +1153,72 @@ export default function VisualiserPage() {
   }
 
   async function generateBulkPreviews() {
-  if (!product) {
-    setBulkPreviewError("Please select a product first.");
-    return;
-  }
-
-  if (!product.featuredImage) {
-    setBulkPreviewError("This product has no base image.");
-    return;
-  }
-
-  if (!activeZoneId) {
-    setBulkPreviewError("Please save or select a zone first.");
-    return;
-  }
-
-  // Build the combined list of jobs: selected recent swatches + uploaded files + folder files
-  type BulkJob =
-    | { kind: "file"; file: File; colourName: string; fabricFamily: string }
-    | { kind: "url"; url: string; colourName: string; fabricFamily: string };
-
-  const jobs: BulkJob[] = [];
-
-  // Add recent swatches first (in selection order)
-  for (const swatchId of selectedRecentSwatchIds) {
-    const swatch = recentSwatches.find((s) => s.id === swatchId);
-    if (swatch && swatch.imageUrl) {
-      jobs.push({
-        kind: "url",
-        url: swatch.imageUrl,
-        colourName: swatch.colourName,
-        fabricFamily: swatch.fabricFamily || "General",
-      });
+    if (!product) {
+      setBulkPreviewError("Please select a product first.");
+      return;
     }
-  }
+    if (!product.featuredImage) {
+      setBulkPreviewError("This product has no base image.");
+      return;
+    }
+    if (!activeZoneId) {
+      setBulkPreviewError("Please save or select a zone first.");
+      return;
+    }
 
-  // Then add individually uploaded files
-  for (const file of bulkSwatchFiles) {
-    jobs.push({
-      kind: "file",
-      file,
-      colourName: file.name.replace(/\.[^/.]+$/, ""),
-      fabricFamily: "General",
-    });
-  }
+    // ── Build combined job list ───────────────────────────────────────────
+    type BulkJob =
+      | { kind: "file"; file: File; colourName: string; fabricFamily: string }
+      | { kind: "url"; url: string; colourName: string; fabricFamily: string };
 
-  // Then add folder-derived files (with auto-detected fabric family + colour name)
-  for (const job of folderSwatchJobs) {
-    jobs.push({
-      kind: "file",
-      file: job.file,
-      colourName: job.colourName,
-      fabricFamily: job.fabricFamily,
-    });
-  }
+    const swatchJobs: BulkJob[] = [];
 
-  if (jobs.length === 0) {
-    setBulkPreviewError(
-      "Please select at least 1 recent colour or upload at least 1 swatch file.",
+    for (const swatchId of selectedRecentSwatchIds) {
+      const swatch = recentSwatches.find((s) => s.id === swatchId);
+      if (swatch?.imageUrl) {
+        swatchJobs.push({ kind: "url", url: swatch.imageUrl, colourName: swatch.colourName, fabricFamily: swatch.fabricFamily || "General" });
+      }
+    }
+    for (const file of bulkSwatchFiles) {
+      swatchJobs.push({ kind: "file", file, colourName: file.name.replace(/\.[^/.]+$/, ""), fabricFamily: "General" });
+    }
+    for (const j of folderSwatchJobs) {
+      swatchJobs.push({ kind: "file", file: j.file, colourName: j.colourName, fabricFamily: j.fabricFamily });
+    }
+
+    if (swatchJobs.length === 0) {
+      setBulkPreviewError("Please select at least 1 recent colour or upload at least 1 swatch file.");
+      return;
+    }
+
+    // ── Reset state ──────────────────────────────────────────────────────
+    setBulkPreviewLoading(true);
+    setBulkPreviewError(null);
+    setSelectedBulkIndex(null);
+    setBulkJobIds([]);
+    setBulkJobResultMap(new Map());
+    setBulkJobDoneCount(0);
+    bulkResolvedRef.current = new Set();
+    setCurrentBatch(0);
+    setTotalBatches(swatchJobs.length);
+    setGeneratedCount(0);
+    setGenerationNotice(
+      `Queueing ${swatchJobs.length} preview${swatchJobs.length === 1 ? "" : "s"} in the background. You can switch products and they will keep generating.`
     );
-    return;
-  }
 
-  setBulkPreviewLoading(true);
-  setBulkPreviewError(null);
-  setBulkPreviewResults([]);
-  setSelectedBulkIndex(null);
+    // ── Queue all jobs concurrently (fast — just DB writes + R2 swatch uploads) ──
+    const queued: string[] = [];
+    const failed: string[] = [];
 
-  const totalItems = jobs.length;
-  const batchSize = 10;
-  const { totalBatches: batches } = getBatchInfo(totalItems, batchSize);
-
-  setCurrentBatch(0);
-  setTotalBatches(batches);
-  setGeneratedCount(0);
-  setGenerationNotice(
-    "Previews are generated in batches of 10 to keep processing fast and stable. You can view completed images in the Preview Manager."
-  );
-
-  const results: Array<{ fileName: string; previewUrl: string }> = [];
-  const skipped: string[] = [];
-
-  try {
-    for (let i = 0; i < jobs.length; i += batchSize) {
-      const batch = jobs.slice(i, i + batchSize);
-      const batchNumber = Math.floor(i / batchSize) + 1;
-
-      setCurrentBatch(batchNumber);
-
-      for (const job of batch) {
+    await Promise.all(
+      swatchJobs.map(async (job) => {
         const formData = new FormData();
-        formData.append("productId", product.id);
-        formData.append("zoneId", activeZoneId);
+        formData.append("productId", product!.id);
+        formData.append("zoneId", activeZoneId!);
         formData.append("fabricFamily", job.fabricFamily);
         formData.append("colourName", job.colourName);
+        formData.append("productTitle", product!.title);
+        if (product!.featuredImage) formData.append("productImageUrl", product!.featuredImage);
 
         if (job.kind === "file") {
           formData.append("swatch", job.file);
@@ -1180,82 +1227,38 @@ export default function VisualiserPage() {
         }
 
         try {
-          const response = await fetch("/api/generate-preview", {
-            method: "POST",
-            body: formData,
-          });
-
-          const rawText = await response.text();
-
-          let data: unknown;
-          try {
-            data = JSON.parse(rawText);
-          } catch {
-            skipped.push(job.colourName);
-            continue;
-          }
-
-          if (!response.ok) {
-            const errorMessage =
-              typeof data === "object" &&
-              data !== null &&
-              "error" in data &&
-              typeof (data as { error: unknown }).error === "string"
-                ? (data as { error: string }).error
-                : `Failed on ${job.colourName}`;
-            skipped.push(`${job.colourName} (${errorMessage})`);
-            continue;
-          }
-
-          if (
-            typeof data === "object" &&
-            data !== null &&
-            "preview" in data &&
-            typeof (data as { preview: { url?: string } }).preview?.url === "string"
-          ) {
-            results.push({
-              fileName: job.colourName,
-              previewUrl: (data as { preview: { url: string } }).preview.url,
-            });
-            setBulkPreviewResults([...results]);
+          const res  = await fetch("/api/queue-generation", { method: "POST", body: formData });
+          const data = await res.json() as { jobId?: string; error?: string };
+          if (res.ok && data.jobId) {
+            queued.push(data.jobId);
           } else {
-            skipped.push(job.colourName);
+            failed.push(`${job.colourName} (${data.error ?? "unknown error"})`);
           }
         } catch {
-          skipped.push(job.colourName);
+          failed.push(job.colourName);
         }
-      }
+      })
+    );
 
-      setGeneratedCount(results.length);
+    if (queued.length === 0) {
+      setBulkPreviewLoading(false);
+      setBulkPreviewError(`All jobs failed to queue: ${failed.join(", ")}`);
+      setGenerationNotice(null);
+      return;
     }
 
-    // Refresh recent swatches and clear selections after bulk run
-    loadRecentSwatches();
-    setSelectedRecentSwatchIds([]);
-    setFolderSwatchJobs([]);
-
-    if (skipped.length > 0) {
-      setBulkPreviewError(
-        `${skipped.length} preview${skipped.length === 1 ? "" : "s"} could not be generated: ${skipped.join(", ")}`
-      );
+    if (failed.length > 0) {
+      setBulkPreviewError(`${failed.length} could not be queued: ${failed.join(", ")}`);
     }
 
     setGenerationNotice(
-      results.length > 0
-        ? "Preview generation finished. Review completed images in the Preview Manager."
-        : null
+      `${queued.length} preview${queued.length === 1 ? "" : "s"} queued. Generating in the background — you can switch products freely.`
     );
-    setCurrentBatch(0);
-    setTotalBatches(0);
-  } catch (err) {
-    console.error("Bulk preview error:", err);
-    setBulkPreviewError(
-      err instanceof Error ? err.message : "Failed to generate bulk previews."
-    );
-  } finally {
-    setBulkPreviewLoading(false);
+
+    // Hand off to the polling effect
+    setBulkJobIds(queued);
+    // Note: setBulkPreviewLoading(false) is called by the polling effect when all resolve
   }
-}
 
   async function saveZone() {
     if (!product) {
@@ -1394,7 +1397,8 @@ export default function VisualiserPage() {
     });
 
     setFolderSwatchJobs(jobs);
-    setBulkPreviewResults([]);
+    setBulkJobResultMap(new Map());
+    setBulkJobIds([]);
     setBulkPreviewError(null);
   }
 
@@ -1479,10 +1483,13 @@ const stepTextStyle: CSSProperties = {
   return (
   <div style={pageWrapStyle}>
       {/* Pulse animation for generating badge */}
-      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`}</style>
+      <style>{`
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
+        @keyframes spin  { to { transform: rotate(360deg) } }
+      `}</style>
 
       {/* ── Floating "generating in background" banner ───────────────────── */}
-      {activeJobId && activeJobStatus !== "DONE" && activeJobStatus !== "FAILED" && (
+      {(bulkJobIds.length > 0 && bulkPreviewLoading) || (activeJobId && activeJobStatus !== "DONE" && activeJobStatus !== "FAILED") ? (
         <div style={{
           position: "fixed",
           bottom: "24px",
@@ -1503,7 +1510,9 @@ const stepTextStyle: CSSProperties = {
             }} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: "13px" }}>
-                {activeJobStatus === "PROCESSING"
+                {bulkJobIds.length > 0 && bulkPreviewLoading
+                  ? `Bulk generating… ${bulkJobDoneCount} / ${bulkJobIds.length} done`
+                  : activeJobStatus === "PROCESSING"
                   ? `Generating colour preview… ${activeJobProgress}%`
                   : "Preview queued…"}
               </div>
@@ -1516,13 +1525,15 @@ const stepTextStyle: CSSProperties = {
           <div style={{ marginTop: "10px", borderRadius: "4px", background: "rgba(255,255,255,0.15)", height: "5px", overflow: "hidden" }}>
             <div style={{
               height: "100%",
-              width: `${activeJobProgress}%`,
+              width: bulkJobIds.length > 0
+                ? `${Math.round((bulkJobDoneCount / bulkJobIds.length) * 100)}%`
+                : `${activeJobProgress}%`,
               background: "#818cf8",
               transition: "width 0.5s ease",
             }} />
           </div>
         </div>
-      )}
+      ) : null}
 
       <div style={{ marginBottom: "24px" }}>
         <h1 style={{ marginBottom: "8px" }}>Product Setup</h1>
@@ -2166,46 +2177,46 @@ const stepTextStyle: CSSProperties = {
                   </div>
                 )}
 
-                {bulkPreviewResults.length > 0 && (
+                {(bulkPreviewResults.length > 0 || (bulkJobIds.length > 0 && bulkPreviewLoading)) && (
                   <div style={{ marginTop: "24px" }}>
-                    <h3>Generated colour previews</h3>
+                    <h3>
+                      Colour previews
+                      {bulkJobIds.length > 0 && (
+                        <span style={{ marginLeft: "10px", fontSize: "13px", fontWeight: 400, color: "#6b7280" }}>
+                          {bulkJobDoneCount} / {bulkJobIds.length} done
+                        </span>
+                      )}
+                    </h3>
                     <p style={{ fontSize: "13px", color: "#666" }}>
-                      Click a preview to view it in full.
+                      {bulkPreviewLoading
+                        ? "Generating in the background — results appear as each one finishes."
+                        : "Click a preview to view it in full."}
                     </p>
 
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                        gap: "12px",
-                      }}
-                    >
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "12px" }}>
+                      {/* Completed previews */}
                       {bulkPreviewResults.map((item, index) => (
                         <button
                           key={item.previewUrl}
                           type="button"
                           onClick={() => setSelectedBulkIndex(index)}
-                          style={{
-                            border: "1px solid #ddd",
-                            borderRadius: "8px",
-                            padding: "8px",
-                            background: "#fff",
-                            cursor: "pointer",
-                            textAlign: "left",
-                          }}
+                          style={{ border: "1px solid #ddd", borderRadius: "8px", padding: "8px", background: "#fff", cursor: "pointer", textAlign: "left" }}
                         >
-                          <img
-                            src={item.previewUrl}
-                            alt={item.fileName}
-                            style={{
-                              width: "100%",
-                              borderRadius: "6px",
-                              display: "block",
-                              marginBottom: "8px",
-                            }}
-                          />
+                          <img src={item.previewUrl} alt={item.fileName}
+                            style={{ width: "100%", borderRadius: "6px", display: "block", marginBottom: "8px" }} />
                           <p style={{ fontSize: "13px", margin: 0 }}>{item.fileName}</p>
                         </button>
+                      ))}
+                      {/* Pending placeholders */}
+                      {bulkPreviewLoading && Array.from({ length: bulkJobIds.length - bulkJobDoneCount }).map((_, i) => (
+                        <div key={`pending-${i}`} style={{
+                          border: "1px solid #e5e7eb", borderRadius: "8px", padding: "8px",
+                          background: "#f9fafb", aspectRatio: "1", display: "flex", flexDirection: "column",
+                          alignItems: "center", justifyContent: "center", gap: "8px",
+                        }}>
+                          <div style={{ width: "24px", height: "24px", border: "3px solid #e5e7eb", borderTopColor: "#6366f1", borderRadius: "50%", animation: "spin 0.9s linear infinite" }} />
+                          <span style={{ fontSize: "11px", color: "#9ca3af" }}>Generating…</span>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -3162,7 +3173,8 @@ const stepTextStyle: CSSProperties = {
                               onChange={(e) => {
                                 const files = Array.from(e.target.files || []);
                                 setBulkSwatchFiles(files);
-                                setBulkPreviewResults([]);
+                                setBulkJobResultMap(new Map());
+                                setBulkJobIds([]);
                                 setBulkPreviewError(null);
                               }}
                             />
@@ -3358,24 +3370,23 @@ const stepTextStyle: CSSProperties = {
                         }}
                       >
                         {bulkPreviewLoading
-                          ? "Generating previews..."
-                          : "Generate bulk previews"}
+                          ? `Generating… ${bulkJobDoneCount} / ${bulkJobIds.length} done`
+                          : "Queue bulk previews"}
                       </button>
 
                       {/* Progress / status */}
-                      {bulkPreviewLoading && totalBatches > 0 && (
-                        <div
-                          style={{
-                            marginTop: "10px",
-                            fontSize: "13px",
-                            fontWeight: 700,
-                            color: "#1d4ed8",
-                          }}
-                        >
-                          Generating batch {currentBatch} of {totalBatches}
-                          {generatedCount > 0
-                            ? ` • ${generatedCount} preview${generatedCount === 1 ? "" : "s"} completed`
-                            : ""}
+                      {bulkPreviewLoading && bulkJobIds.length > 0 && (
+                        <div style={{ marginTop: "10px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#6b7280", marginBottom: "4px" }}>
+                            <span>{bulkJobDoneCount} of {bulkJobIds.length} previews done</span>
+                            <span>{Math.round((bulkJobDoneCount / bulkJobIds.length) * 100)}%</span>
+                          </div>
+                          <div style={{ borderRadius: "4px", background: "#e5e7eb", height: "6px", overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${Math.round((bulkJobDoneCount / bulkJobIds.length) * 100)}%`, background: "#4f46e5", transition: "width 0.4s ease" }} />
+                          </div>
+                          <p style={{ marginTop: "6px", fontSize: "12px", color: "#6b7280" }}>
+                            💡 You can switch products — these are generating in the background
+                          </p>
                         </div>
                       )}
 

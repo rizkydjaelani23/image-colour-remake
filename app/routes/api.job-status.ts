@@ -27,17 +27,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
       const job = await prisma.generationJob.findFirst({
         where: { id: jobId, shopId: shop.id },
         select: {
-          id:          true,
-          status:      true,
-          progress:    true,
+          id:           true,
+          status:       true,
+          progress:     true,
           fabricFamily: true,
-          colourName:  true,
-          previewId:   true,
-          previewUrl:  true,
+          colourName:   true,
+          previewId:    true,
+          previewUrl:   true,
           errorMessage: true,
-          createdAt:   true,
-          startedAt:   true,
-          completedAt: true,
+          createdAt:    true,
+          startedAt:    true,
+          completedAt:  true,
+          shopifyProductId: true,
         },
       });
 
