@@ -62,11 +62,15 @@ export async function action({ request }: ActionFunctionArgs) {
     // ── Auth / billing check (we have the session here) ──────────────────────
     const shop = await getOrCreateShop(shopDomain);
 
-    const { previewLimit } = await getCurrentBillingPlan(admin);
+    const { previewLimit, apiSucceeded } = await getCurrentBillingPlan(admin);
     const usage = await syncShopUsage({
       shopId: shop.id,
       previewLimit,
       resetExpiredCycle: true,
+      // Only overwrite the stored limit when Shopify's API actually responded.
+      // If the API timed out / rate-limited, apiSucceeded=false and we keep the
+      // previously-stored limit so Pro stores aren't wrongly capped at 50.
+      updateLimit: apiSucceeded,
     });
 
     if (usage.previewCount >= usage.previewLimit) {

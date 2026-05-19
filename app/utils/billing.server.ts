@@ -39,6 +39,7 @@ export function getManagedPricingUrl(shopDomain: string) {
 export async function getCurrentBillingPlan(admin: ShopifyAdminClient) {
   let planName = "Free";
   let previewLimit = FREE_PREVIEW_LIMIT;
+  let apiSucceeded = false;
 
   try {
     const subscriptionResponse = await admin.graphql(`
@@ -56,6 +57,8 @@ export async function getCurrentBillingPlan(admin: ShopifyAdminClient) {
     const subs =
       subscriptionData?.data?.currentAppInstallation?.activeSubscriptions || [];
 
+    apiSucceeded = true; // GraphQL responded — data is trustworthy
+
     const activeSub = subs.find(
       (subscription: { status: string }) => subscription.status === "ACTIVE",
     );
@@ -66,7 +69,8 @@ export async function getCurrentBillingPlan(admin: ShopifyAdminClient) {
     }
   } catch (error) {
     console.error("Failed to check subscription:", error);
+    // apiSucceeded stays false — caller should not overwrite the cached DB limit
   }
 
-  return { planName, previewLimit };
+  return { planName, previewLimit, apiSucceeded };
 }
