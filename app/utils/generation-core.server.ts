@@ -133,7 +133,7 @@ async function tileSwatchToSize(
   const base = await sharp(swatchBuffer)
     .resize(targetSize, targetSize, { fit: "cover" })
     .blur(1.2)
-    .modulate({ brightness: 1.02, saturation: 1.05 })
+    .modulate({ brightness: 0.97, saturation: 1.01 })
     .png()
     .toBuffer();
 
@@ -260,8 +260,8 @@ async function createSmoothColourLayer(
     .resize(width, height, { fit: "fill" })
     .blur(7)
     .modulate({
-      brightness: 0.97 * warmFactor,
-      saturation: 1.15,
+      brightness: 0.89 * warmFactor, // was 0.97 — real plush absorbs more light than a flat swatch
+      saturation: 1.05,              // was 1.15 — less aggressive boost, avoids oversaturation
     })
     .png()
     .toBuffer();
@@ -309,7 +309,7 @@ async function createDistanceFabricLayer(
   const stretchedSwatch = await sharp(swatchBuffer)
     .resize(width, height, { fit: "fill" })
     .blur(6)
-    .modulate({ brightness: 1.01, saturation: 1.04 })
+    .modulate({ brightness: 0.95, saturation: 1.01 }) // was 1.01 / 1.04
     .png()
     .toBuffer();
 
@@ -322,7 +322,7 @@ async function createDistanceFabricLayer(
 
   return sharp(baseColour)
     .composite([{ input: softenedVariation, blend: "soft-light" }])
-    .modulate({ brightness: 1.01, saturation: 1.03 })
+    .modulate({ brightness: 0.95, saturation: 1.01 }) // was 1.01 / 1.03
     .png()
     .toBuffer();
 }
@@ -372,8 +372,8 @@ export async function buildRealisticComposite(params: {
       { input: textureLight, blend: "soft-light" },
     ])
     .modulate({
-      brightness: (renderMode === "smooth-colour" ? 0.93 : 0.99) * warmFactor,
-      saturation: renderMode === "smooth-colour" ? 1.15 : 1.20,
+      brightness: (renderMode === "smooth-colour" ? 0.87 : 0.91) * warmFactor, // was 0.93 / 0.99
+      saturation: renderMode === "smooth-colour" ? 1.05 : 1.08,                // was 1.15 / 1.20
     })
     .gamma(1.01)
     .png()
@@ -420,13 +420,17 @@ export async function buildRealisticComposite(params: {
     const isBrightFabric    = fabricLumRaw > 160  && fabricLumRaw <= 210;
     const isNearWhiteFabric = fabricLumRaw > 210;
 
+    // Alpha controls how much of the fabric layer covers the base image.
+    // Lower values let more base shadow/depth show through — making the
+    // result look grounded rather than like a flat colour overlay.
+    // Reduced ~5-8% from previous values based on real-fabric comparison.
     const alphaBase = renderMode === "smooth-colour"
-      ? (isBlackFabric     ? 0.82
-       : isDarkFabric      ? 0.91
-       : isMidLightFabric  ? 0.74
-       : isNearWhiteFabric ? 0.73
-       : isBrightFabric    ? 0.80
-       : 0.88)
+      ? (isBlackFabric     ? 0.78  // was 0.82
+       : isDarkFabric      ? 0.86  // was 0.91
+       : isMidLightFabric  ? 0.70  // was 0.74
+       : isNearWhiteFabric ? 0.68  // was 0.73
+       : isBrightFabric    ? 0.75  // was 0.80
+       : 0.83)                      // was 0.88
       : blendStrength;
     const alpha = Math.max(0, Math.min(1, maskValue * alphaBase));
 
@@ -547,7 +551,7 @@ export async function runGeneration(
   }
 
   const tileScale     = 0.14;
-  const blendStrength = 0.75;
+  const blendStrength = 0.70; // was 0.75 — lets more base shadow through for soft-texture fabrics
 
   const finalComposite = await buildRealisticComposite({
     baseBuffer,
