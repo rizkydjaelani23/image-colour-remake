@@ -15,6 +15,13 @@ enum PreviewStatus {
   FEATURED
 }
 
+enum JobStatus {
+  PENDING
+  PROCESSING
+  DONE
+  FAILED
+}
+
 model Shop {
   id          String   @id @default(cuid())
   shopDomain  String   @unique
@@ -30,12 +37,13 @@ model Shop {
 
   usage ShopUsage?
 
-  products      Product[]
-  zones         Zone[]
-  swatches      Swatch[]
-  previews      Preview[]
-  conversations SupportConversation[]
-  gscConnection GscConnection?
+  products        Product[]
+  zones           Zone[]
+  swatches        Swatch[]
+  previews        Preview[]
+  conversations   SupportConversation[]
+  gscConnection   GscConnection?
+  generationJobs  GenerationJob[]
 }
 
 model Product {
@@ -49,9 +57,10 @@ model Product {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  shop     Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  zones    Zone[]
-  previews Preview[]
+  shop            Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  zones           Zone[]
+  previews        Preview[]
+  generationJobs  GenerationJob[]
 
   @@unique([shopId, shopifyProductId])
   @@index([shopId])
@@ -70,9 +79,10 @@ model Zone {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  shop     Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  product  Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
-  previews Preview[]
+  shop            Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product         Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  previews        Preview[]
+  generationJobs  GenerationJob[]
 
   @@unique([productId, key])
   @@index([shopId, productId])
@@ -204,4 +214,35 @@ model ShopUsage {
   updatedAt    DateTime @updatedAt
 
   shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+}
+
+model GenerationJob {
+  id               String    @id @default(cuid())
+  shopId           String
+  productId        String
+  zoneId           String
+  shopifyProductId String
+  fabricFamily     String
+  colourName       String
+  /// R2 URL of the raw swatch image uploaded at queue time
+  swatchUrl        String    @db.Text
+  swatchId         String?
+  status           JobStatus @default(PENDING)
+  /// 0–100 progress percentage
+  progress         Int       @default(0)
+  errorMessage     String?   @db.Text
+  previewId        String?
+  previewUrl       String?   @db.Text
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  startedAt        DateTime?
+  completedAt      DateTime?
+
+  shop    Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  zone    Zone    @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, status])
+  @@index([productId, status])
+  @@index([zoneId])
 }

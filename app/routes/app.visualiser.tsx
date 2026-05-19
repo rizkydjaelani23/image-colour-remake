@@ -297,6 +297,13 @@ export default function VisualiserPage() {
   const [maskLibraryCopying, setMaskLibraryCopying] = useState(false);
   const [maskLibrarySearch, setMaskLibrarySearch] = useState("");
 
+  // ── Background generation job tracking ───────────────────────────────────
+  const [activeJobId, setActiveJobId]         = useState<string | null>(null);
+  const [activeJobProgress, setActiveJobProgress] = useState(0);
+  const [activeJobStatus, setActiveJobStatus] = useState<"PENDING" | "PROCESSING" | "DONE" | "FAILED" | null>(null);
+  /** shopifyProductId → number of active (PENDING/PROCESSING) jobs */
+  const [shopJobMap, setShopJobMap] = useState<Map<string, number>>(new Map());
+
   const imageRef = useRef<HTMLImageElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -336,6 +343,11 @@ export default function VisualiserPage() {
     setBulkUploadMode("files");
     setFolderSwatchJobs([]);
     setImageLoaded(false);
+    // Clear job tracking for the previous product (job keeps running server-side)
+    setActiveJobId(null);
+    setActiveJobProgress(0);
+    setActiveJobStatus(null);
+    setPreviewLoading(false);
   }
 
   async function loadZones(productId: string): Promise<Zone[]> {
@@ -851,6 +863,61 @@ export default function VisualiserPage() {
     loadRecentSwatches();
   }, []);
 
+  // ── Poll active job progress ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!activeJobId) return;
+    if (activeJobStatus === "DONE" || activeJobStatus === "FAILED") return;
+
+    let mounted = true;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/job-status?jobId=${encodeURIComponent(activeJobId)}`);
+        if (!res.ok || !mounted) return;
+        const { job } = await res.json() as { job?: { status: string; progress: number; previewUrl?: string; errorMessage?: string } };
+        if (!job || !mounted) return;
+        setActiveJobProgress(job.progress);
+        setActiveJobStatus(job.status as "PENDING" | "PROCESSING" | "DONE" | "FAILED");
+        if (job.status === "DONE" && job.previewUrl) {
+          setGeneratedPreviewUrl(job.previewUrl);
+          setPreviewLoading(false);
+          loadRecentSwatches();
+        } else if (job.status === "FAILED") {
+          setPreviewError(job.errorMessage || "Generation failed. Please try again.");
+          setPreviewLoading(false);
+        }
+      } catch { /* ignore transient poll errors */ }
+    };
+
+    poll(); // poll immediately
+    const interval = setInterval(poll, 2500);
+    return () => { mounted = false; clearInterval(interval); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeJobId, activeJobStatus]);
+
+  // ── Poll shop-wide active jobs (for product picker badges) ────────────────
+  useEffect(() => {
+    if (!showProductPicker) return;
+    let mounted = true;
+
+    const fetchJobCounts = async () => {
+      try {
+        const res = await fetch("/api/job-status");
+        if (!res.ok || !mounted) return;
+        const { jobs } = await res.json() as { jobs?: Array<{ shopifyProductId: string }> };
+        if (!jobs || !mounted) return;
+        const map = new Map<string, number>();
+        for (const j of jobs) {
+          map.set(j.shopifyProductId, (map.get(j.shopifyProductId) ?? 0) + 1);
+        }
+        setShopJobMap(map);
+      } catch { /* ignore */ }
+    };
+
+    fetchJobCounts();
+    const interval = setInterval(fetchJobCounts, 5000);
+    return () => { mounted = false; clearInterval(interval); };
+  }, [showProductPicker]);
+
   function toggleRecentSwatch(swatchId: string) {
     setSelectedRecentSwatchIds((prev) => {
       if (prev.includes(swatchId)) {
@@ -916,6 +983,10 @@ export default function VisualiserPage() {
 
     setPreviewLoading(true);
     setPreviewError(null);
+    setGeneratedPreviewUrl(null);
+    setActiveJobId(null);
+    setActiveJobProgress(0);
+    setActiveJobStatus(null);
 
     try {
       const formData = new FormData();
@@ -928,14 +999,17 @@ export default function VisualiserPage() {
       }
       formData.append("fabricFamily", "General");
       formData.append("colourName", fabricName.trim());
+      formData.append("productTitle", product.title);
+      if (product.featuredImage) {
+        formData.append("productImageUrl", product.featuredImage);
+      }
 
-      const response = await fetch("/api/generate-preview", {
+      const response = await fetch("/api/queue-generation", {
         method: "POST",
         body: formData,
       });
 
       const rawText = await response.text();
-      console.log("Generate preview response:", rawText);
 
       let data: unknown;
       try {
@@ -951,34 +1025,28 @@ export default function VisualiserPage() {
             "error" in data &&
             typeof (data as { error: unknown }).error === "string"
             ? (data as { error: string }).error
-            : "Failed to generate preview";
-
+            : "Failed to queue generation";
         throw new Error(errorMessage);
       }
 
       if (
         typeof data === "object" &&
         data !== null &&
-        "preview" in data &&
-        typeof (data as { preview: { url?: string } }).preview?.url === "string"
+        "jobId" in data &&
+        typeof (data as { jobId: string }).jobId === "string"
       ) {
-        setGeneratedPreviewUrl((data as { preview: { url: string } }).preview.url);
-        // Refresh recent swatches so the one we just used appears at the top
-        loadRecentSwatches();
+        // Job queued — polling effect will pick up from here
+        setActiveJobId((data as { jobId: string }).jobId);
+        setActiveJobStatus("PENDING");
       } else {
-        throw new Error("Preview URL was not returned.");
+        throw new Error("Job ID was not returned by the server.");
       }
     } catch (err) {
-      console.error("Generate preview error:", err);
-
-      if (err instanceof Error) {
-        setPreviewError(err.message);
-      } else {
-        setPreviewError("Failed to generate preview.");
-      }
-    } finally {
+      console.error("Queue generation error:", err);
+      setPreviewError(err instanceof Error ? err.message : "Failed to queue generation.");
       setPreviewLoading(false);
     }
+    // Note: previewLoading stays true — the polling effect will set it false when done/failed
   }
 
   async function generateBulkPreviews() {
@@ -1382,6 +1450,8 @@ const stepTextStyle: CSSProperties = {
 
   return (
   <div style={pageWrapStyle}>
+      {/* Pulse animation for generating badge */}
+      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`}</style>
       <div style={{ marginBottom: "24px" }}>
         <h1 style={{ marginBottom: "8px" }}>Product Setup</h1>
         <p style={{ margin: 0, color: "#555", maxWidth: "780px", lineHeight: 1.5 }}>
@@ -1559,6 +1629,7 @@ const stepTextStyle: CSSProperties = {
                     filteredPickerProducts.map((p) => {
                       const inManager = previewManagerSet.has(p.id);
                       const isDuplicate = duplicateTitleSet.has(p.title.trim().toLowerCase());
+                      const activeJobCount = shopJobMap.get(p.id) ?? 0;
                       const statusColour: Record<ProductStatus, { bg: string; text: string }> = {
                         ACTIVE:   { bg: "#dcfce7", text: "#166534" },
                         DRAFT:    { bg: "#fef9c3", text: "#854d0e" },
@@ -1612,6 +1683,13 @@ const stepTextStyle: CSSProperties = {
                               {inManager && (
                                 <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "999px", background: "#ede9fe", color: "#6d28d9" }}>
                                   in preview manager
+                                </span>
+                              )}
+                              {/* Background generation badge */}
+                              {activeJobCount > 0 && (
+                                <span style={{ fontSize: "11px", fontWeight: 700, padding: "1px 6px", borderRadius: "999px", background: "#fef3c7", color: "#92400e", border: "1px solid #fcd34d", display: "flex", alignItems: "center", gap: "3px" }}>
+                                  <span style={{ display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", background: "#f59e0b", animation: "pulse 1.5s infinite" }} />
+                                  {activeJobCount === 1 ? "Generating…" : `${activeJobCount} generating…`}
                                 </span>
                               )}
                             </div>
@@ -1863,7 +1941,19 @@ const stepTextStyle: CSSProperties = {
                   <div>✅ Product selected</div>
                   <div>{zones.length > 0 ? "✅" : "⏳"} Fabric area saved</div>
                   <div>{swatchFile || bulkSwatchFiles.length > 0 || folderSwatchJobs.length > 0 ? "✅" : "⏳"} Swatch uploaded</div>
-                  <div>{generatedPreviewUrl || bulkPreviewResults.length > 0 ? "✅" : "⏳"} Preview created</div>
+                  <div>
+                    {generatedPreviewUrl || bulkPreviewResults.length > 0
+                      ? "✅"
+                      : previewLoading && activeJobId
+                      ? "⚙️"
+                      : "⏳"}{" "}
+                    Preview created
+                    {previewLoading && activeJobId && (
+                      <span style={{ marginLeft: "8px", fontSize: "12px", color: "#6b7280" }}>
+                        ({activeJobStatus === "PROCESSING" ? `${activeJobProgress}%` : "queued"})
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -2854,17 +2944,44 @@ const stepTextStyle: CSSProperties = {
                           padding: "12px 14px",
                           borderRadius: "8px",
                           border: "1px solid #111827",
-                          background: "#111827",
+                          background: previewLoading ? "#374151" : "#111827",
                           color: "#ffffff",
                           cursor: (previewLoading || (!swatchFile && !swatchUrl)) ? "not-allowed" : "pointer",
-                          opacity: (previewLoading || (!swatchFile && !swatchUrl)) ? 0.45 : 1,
+                          opacity: (!swatchFile && !swatchUrl) ? 0.45 : 1,
                           minHeight: "44px",
                           fontWeight: 700,
                           fontSize: "14px",
                         }}
                       >
-                        {previewLoading ? "Generating..." : (!swatchFile && !swatchUrl) ? "Pick a swatch first" : "Create single preview"}
+                        {previewLoading
+                          ? activeJobStatus === "PROCESSING"
+                            ? `Generating… ${activeJobProgress}%`
+                            : activeJobStatus === "PENDING"
+                            ? "Queued…"
+                            : "Queuing…"
+                          : (!swatchFile && !swatchUrl)
+                          ? "Pick a swatch first"
+                          : "Create single preview"}
                       </button>
+
+                      {/* Progress bar — shown while job is in flight */}
+                      {previewLoading && activeJobId && (
+                        <div style={{ marginTop: "8px", borderRadius: "4px", background: "#e5e7eb", overflow: "hidden", height: "6px" }}>
+                          <div style={{
+                            height: "100%",
+                            width: `${activeJobProgress}%`,
+                            background: activeJobStatus === "PROCESSING" ? "#4f46e5" : "#94a3b8",
+                            transition: "width 0.4s ease",
+                          }} />
+                        </div>
+                      )}
+
+                      {/* "You can work on another product" hint */}
+                      {previewLoading && activeJobId && (
+                        <p style={{ marginTop: "6px", fontSize: "12px", color: "#6b7280", textAlign: "center" }}>
+                          💡 You can select another product while this generates in the background
+                        </p>
+                      )}
 
                       {previewError && (
                         <p style={{ marginTop: "10px", color: "crimson", fontWeight: 600, fontSize: "13px" }}>
