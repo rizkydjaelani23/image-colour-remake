@@ -1,552 +1,21 @@
+/**
+ * POST /api/generate-preview
+ *
+ * Synchronous generation — runs the full pipeline in the request and returns
+ * when the preview is ready. Uses runGeneration() from generation-core.server.ts
+ * so quality, speed optimisations, and rendering logic stay in one place.
+ */
+
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import sharp from "sharp";
-
 import prisma from "../utils/db.server";
-import { upsertProduct } from "../utils/products.server";
 import { getOrCreateShop } from "../utils/shop.server";
-import { uploadBufferToStorage } from "../utils/storage.server";
+import { upsertProduct } from "../utils/products.server";
 import { getCurrentBillingPlan } from "../utils/billing.server";
 import { syncShopUsage } from "../utils/usage.server";
-import { safeFolderName } from "../utils/visualiser.server";
 import { isSeoAddonActive } from "../utils/seo-addon.server";
 import { updateFabricColoursMetafield } from "../utils/seo-metafield.server";
-
-async function tileSwatchToSize(
-  swatchBuffer: Buffer,
-  width: number,
-  height: number,
-  tileScale = 0.2,
-): Promise<Buffer> {
-  const targetSize = Math.max(120, Math.round(width * tileScale));
-
-  const base = await sharp(swatchBuffer)
-    .resize(targetSize, targetSize, {
-      fit: "cover",
-    })
-    .blur(1.2)
-    .modulate({
-      brightness: 1.02,
-      saturation: 1.05,
-    })
-    .png()
-    .toBuffer();
-
-  return sharp(base)
-    .resize(width, height, {
-      fit: "fill",
-    })
-    .blur(1.2)
-    .png()
-    .toBuffer();
-}
-
-async function createProcessedMask(
-  rawMaskBuffer: Buffer,
-  width: number,
-  height: number,
-): Promise<Buffer> {
-  const baseMask = await sharp(rawMaskBuffer)
-    .resize(width, height)
-    .greyscale()
-    .threshold(140)
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const data = Buffer.from(baseMask.data);
-  const cleaned = Buffer.from(data);
-
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      const i = y * width + x;
-      const value = data[i];
-
-      let whiteNeighbours = 0;
-
-      for (let oy = -1; oy <= 1; oy++) {
-        for (let ox = -1; ox <= 1; ox++) {
-          if (ox === 0 && oy === 0) continue;
-          const ni = (y + oy) * width + (x + ox);
-          if (data[ni] > 127) whiteNeighbours++;
-        }
-      }
-
-      if (value > 127 && whiteNeighbours <= 1) {
-        cleaned[i] = 0;
-      }
-
-      if (value <= 127 && whiteNeighbours >= 7) {
-        cleaned[i] = 255;
-      }
-    }
-  }
-
-  return sharp(cleaned, {
-    raw: {
-      width,
-      height,
-      channels: 1,
-    },
-  })
-    .blur(1)
-    .threshold(120)
-    .blur(0.8)
-    .png()
-    .toBuffer();
-}
-
-async function extractMaskedLighting(
-  baseBuffer: Buffer,
-  maskBuffer: Buffer,
-  width: number,
-  height: number,
-): Promise<Buffer> {
-  const baseGray = await sharp(baseBuffer)
-    .resize(width, height)
-    .greyscale()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const mask = await sharp(maskBuffer)
-    .resize(width, height)
-    .greyscale()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const out = Buffer.alloc(width * height);
-
-  for (let i = 0; i < width * height; i++) {
-    const m = mask.data[i] / 255;
-    out[i] = Math.round(baseGray.data[i] * m);
-  }
-
-  return sharp(out, {
-    raw: {
-      width,
-      height,
-      channels: 1,
-    },
-  })
-    .normalize()
-    .blur(1)
-    .png()
-    .toBuffer();
-}
-
-async function buildRealisticComposite(params: {
-  baseBuffer: Buffer;
-  swatchBuffer: Buffer;
-  maskBuffer: Buffer;
-  width: number;
-  height: number;
-  tileScale: number;
-  blendStrength: number;
-  fabricFamily: string;
-  colourName: string;
-}): Promise<Buffer> {
-  const {
-    baseBuffer,
-    swatchBuffer,
-    maskBuffer,
-    width,
-    height,
-    tileScale,
-    blendStrength,
-    fabricFamily,
-    colourName,
-  } = params;
-
-    const renderMode = getFabricRenderMode(fabricFamily, colourName);
-  const warmFactor = await getSwatchWarmFactor(swatchBuffer);
-
-  // Base image detail + lighting
-  const maskedLighting = await extractMaskedLighting(
-    baseBuffer,
-    maskBuffer,
-    width,
-    height,
-  );
-
-  // ===== MAIN FABRIC COLOUR LAYER =====
-  // This is the important change:
-  // - colour-blend mode uses average colour only
-  // - soft-texture mode uses very soft distance texture
-  // - fallback uses softened tiled swatch
-    let mainFabricLayer: Buffer;
-
-    if (renderMode === "smooth-colour") {
-      mainFabricLayer = await createSmoothColourLayer(
-        swatchBuffer,
-        width,
-        height,
-        warmFactor,
-      );
-    } else if (renderMode === "soft-texture") {
-      mainFabricLayer = await createDistanceFabricLayer(
-        swatchBuffer,
-        width,
-        height,
-      );
-    } else {
-      mainFabricLayer = await createSmoothColourLayer(
-        swatchBuffer,
-        width,
-        height,
-      );
-    }
-
-  // Very soft texture hint, but weak enough that pattern lines do not take over
-  const softTextureLayer = await createSoftTextureLayer(
-    swatchBuffer,
-    width,
-    height,
-  );
-
-  // Build the final fabric layer:
-  // - colour comes mostly from mainFabricLayer
-  // - lighting comes from original image
-  // - detail maps preserve structure
-  // - texture is present only lightly
-      const softenedTextureForBlend = await sharp(softTextureLayer)
-        .blur(2.4)
-        .png()
-        .toBuffer();
-
-      const textureLight = await sharp(softenedTextureForBlend)
-        .linear(renderMode === "smooth-colour" ? 0.10 : 0.15, renderMode === "smooth-colour" ? 118 : 109)
-        .png()
-        .toBuffer();
-
-      // For smooth-colour: compress the maskedLighting range toward neutral (128)
-      // before the soft-light blend. Product photos are typically bright (lum 150-200),
-      // which causes soft-light to LIFT dark fabrics (navy→mid-blue, charcoal→grey).
-      // linear(0.55, 58): maps 0→58, 128→128, 255→198 — reduces effect in both directions
-      // while keeping the neutral point identical so mid-tones are unaffected.
-      const maskedLightingForBlend = renderMode === "smooth-colour"
-        ? await sharp(maskedLighting).linear(0.55, 58).png().toBuffer()
-        : maskedLighting;
-
-      // For soft-texture fabrics: the soft-light blend desaturates colour heavily,
-      // so we apply less lighting and then boost saturation back to preserve chroma.
-      const colouredFabric = await sharp(mainFabricLayer)
-        .composite([
-          { input: maskedLightingForBlend, blend: "soft-light" },
-          { input: textureLight, blend: "soft-light" },
-        ])
-        .modulate({
-          // Apply warmFactor a second time here (after lighting blend) so bright
-          // reds/oranges don't get re-lifted by the soft-light composite.
-          brightness: (renderMode === "smooth-colour" ? 0.93 : 0.99) * warmFactor,
-          saturation: renderMode === "smooth-colour" ? 1.15 : 1.20,
-        })
-        .gamma(1.01)
-        .png()
-        .toBuffer();
-
-  // ===== FINAL PIXEL BLEND =====
-  // IMPORTANT:
-  // We do NOT blend against the original RGB colour anymore.
-  // We neutralise the base to grayscale first, so the original colour
-  // does not push the final swatch lighter/darker in hue.
-  const baseRaw = await sharp(baseBuffer)
-    .resize(width, height)
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const fabricRaw = await sharp(colouredFabric)
-    .resize(width, height)
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const maskRaw = await sharp(maskBuffer)
-    .resize(width, height)
-    .greyscale()
-    .blur(0.3)
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const out = Buffer.alloc(width * height * 4);
-
-  for (let i = 0; i < width * height; i++) {
-    const idx = i * 4;
-
-    const maskValue = maskRaw.data[i] / 255;
-
-    const br = baseRaw.data[idx];
-    const bg = baseRaw.data[idx + 1];
-    const bb = baseRaw.data[idx + 2];
-
-    let fr = fabricRaw.data[idx];
-    let fg = fabricRaw.data[idx + 1];
-    let fb = fabricRaw.data[idx + 2];
-
-    // Keep original image fully untouched outside mask
-    if (maskValue < 0.01) {
-      out[idx] = br;
-      out[idx + 1] = bg;
-      out[idx + 2] = bb;
-      out[idx + 3] = 255;
-      continue;
-    }
-
-    // ── Per-pixel luminosity values ───────────────────────────────────────
-    const sourceLum    = 0.299 * br + 0.587 * bg + 0.114 * bb;
-    const fabricLumRaw = 0.299 * fr + 0.587 * fg + 0.114 * fb;
-
-    // ── Adaptive alpha ────────────────────────────────────────────────────
-    // Six tiers based on fabric luminosity:
-    //   Black/near-black (< 25):    0.82 — back off so tufting lines show on black
-    //   Dark        (25–84):        0.91 — strong coverage for navy/charcoal
-    //   Mid-dark    (85–129):       0.88 — balanced middle ground
-    //   Mid-light   (130–160):      0.74 — warm beige/taupe/mocha tones; texture
-    //                                      pattern on crushed/hammered velvet needs
-    //                                      significant original showing through (26%)
-    //   Bright      (160–210):      0.80 — vivid colours
-    //   Near-white  (> 210):        0.73 — cream/white; preserve tufting shadows
-    const isBlackFabric     = fabricLumRaw < 25;
-    const isDarkFabric      = fabricLumRaw >= 25  && fabricLumRaw < 85;
-    const isMidDarkFabric   = fabricLumRaw >= 85  && fabricLumRaw < 130;
-    const isMidLightFabric  = fabricLumRaw >= 130 && fabricLumRaw <= 160;
-    const isBrightFabric    = fabricLumRaw > 160  && fabricLumRaw <= 210;
-    const isNearWhiteFabric = fabricLumRaw > 210;
-    const alphaBase = renderMode === "smooth-colour"
-      ? (isBlackFabric    ? 0.82
-       : isDarkFabric     ? 0.91
-       : isMidLightFabric ? 0.74
-       : isNearWhiteFabric ? 0.73
-       : isBrightFabric   ? 0.80
-       : 0.88) // isMidDarkFabric
-      : blendStrength;
-    const alpha = Math.max(0, Math.min(1, maskValue * alphaBase));
-
-    // ── Luminosity cap ────────────────────────────────────────────────────
-    // smooth-colour: cap is very loose (2.50) — effectively disabled.
-    // The maskedLighting compression above already prevents over-brightening.
-    // Keeping it as a safety net only for extreme edge cases.
-    // soft-texture: keep a tighter cap to prevent washed-out colours.
-    const lumCap = renderMode === "smooth-colour" ? 2.50 : 1.14;
-    if (fabricLumRaw > 10 && fabricLumRaw > sourceLum * lumCap) {
-      const lumScale = (sourceLum * lumCap) / fabricLumRaw;
-      fr = Math.min(255, Math.round(fr * lumScale));
-      fg = Math.min(255, Math.round(fg * lumScale));
-      fb = Math.min(255, Math.round(fb * lumScale));
-    }
-
-    // Neutralise only inside the fabric area
-    const lum = Math.round(0.299 * br + 0.587 * bg + 0.114 * bb);
-    const neutralMix = renderMode === "smooth-colour" ? 0.0 : 0.65 * maskValue;
-
-    const nr = Math.round(br * (1 - neutralMix) + lum * neutralMix);
-    const ng = Math.round(bg * (1 - neutralMix) + lum * neutralMix);
-    const nb = Math.round(bb * (1 - neutralMix) + lum * neutralMix);
-
-    const finalLum = 0.299 * fr + 0.587 * fg + 0.114 * fb;
-    const isDarkFabricFinal = finalLum < 115;
-    const boost =
-      renderMode === "smooth-colour"
-        ? (isDarkFabricFinal ? 1.02 : 1.0)
-        : (isDarkFabricFinal ? 0.96 : 0.99);
-
-    out[idx] = Math.max(0, Math.min(255, Math.round(nr * (1 - alpha) + fr * boost * alpha)));
-    out[idx + 1] = Math.max(0, Math.min(255, Math.round(ng * (1 - alpha) + fg * boost * alpha)));
-    out[idx + 2] = Math.max(0, Math.min(255, Math.round(nb * (1 - alpha) + fb * boost * alpha)));
-    out[idx + 3] = 255;
-  }
-
-  return sharp(out, {
-    raw: {
-      width,
-      height,
-      channels: 4,
-    },
-  })
-    .png()
-    .toBuffer();
-}
-
-async function createSmoothColourLayer(
-  swatchBuffer: Buffer,
-  width: number,
-  height: number,
-  warmFactor = 1.0,
-): Promise<Buffer> {
-  return sharp(swatchBuffer)
-    .resize(width, height, {
-      fit: "fill",
-    })
-    .blur(7)   // was 14 — reduced to preserve swatch texture/pattern
-    .modulate({
-      brightness: 0.97 * warmFactor,  // dampen vivid warm colours (red/orange) before compositing
-      saturation: 1.15,
-    })
-    .png()
-    .toBuffer();
-}
-
-// ── Warm/bright colour brightness dampening ───────────────────────────────
-// Bright warm colours (red, orange, yellow) can look over-saturated or
-// indistinguishable from each other. We dampen their brightness before
-// compositing so they appear truer to the physical swatch.
-
-function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
-  const rn = r / 255, gn = g / 255, bn = b / 255;
-  const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn);
-  const l = (max + min) / 2;
-  if (max === min) return { h: 0, s: 0, l };
-  const d = max - min;
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  let h = 0;
-  if      (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6;
-  else if (max === gn) h = ((bn - rn) / d + 2) / 6;
-  else                 h = ((rn - gn) / d + 4) / 6;
-  return { h: h * 360, s, l };
-}
-
-/** Returns a brightness multiplier < 1.0 for vivid warm colours, 1.0 otherwise. */
-function warmBrightnessFactor(h: number, s: number, l: number): number {
-  // Only dampen vivid colours that are bright enough to be affected
-  if (s < 0.45 || l < 0.28) return 1.0;
-
-  // Red: 0–22° and 338–360°
-  if (h <= 22 || h >= 338) return 0.91;
-  // Orange-red: 22–38°  — most likely to look like red, dampen most
-  if (h <= 38)             return 0.87;
-  // Orange: 38–52°
-  if (h <= 52)             return 0.89;
-  // Yellow-orange / yellow: 52–72°
-  if (h <= 72)             return 0.91;
-
-  return 1.0;
-}
-
-/** Sample average RGB from a swatch buffer and return warm brightness factor. */
-async function getSwatchWarmFactor(swatchBuffer: Buffer): Promise<number> {
-  try {
-    const { data } = await sharp(swatchBuffer)
-      .resize(8, 8, { fit: "fill" })
-      .removeAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    let rSum = 0, gSum = 0, bSum = 0;
-    const px = data.length / 3;
-    for (let i = 0; i < data.length; i += 3) {
-      rSum += data[i]; gSum += data[i + 1]; bSum += data[i + 2];
-    }
-    const { h, s, l } = rgbToHsl(rSum / px, gSum / px, bSum / px);
-    return warmBrightnessFactor(h, s, l);
-  } catch {
-    return 1.0;
-  }
-}
-
-function getFabricRenderMode(fabricFamily: string, colourName: string) {
-  const text = `${fabricFamily} ${colourName}`.toLowerCase();
-
-  if (
-    text.includes("plush") ||
-    text.includes("velvet") ||
-    text.includes("mink")
-  ) {
-    return "smooth-colour";
-  }
-
-  if (text.includes("suede") || text.includes("venice")) {
-    return "soft-texture";
-  }
-
-  return "soft-texture";
-}
-
-async function createSoftTextureLayer(
-  swatchBuffer: Buffer,
-  width: number,
-  height: number,
-): Promise<Buffer> {
-  const tiled = await tileSwatchToSize(swatchBuffer, width, height, 0.18);
-
-  return sharp(tiled)
-    .greyscale()
-    .normalise()
-    .blur(0.8)
-    .modulate({
-      brightness: 0.99,
-      saturation: 0.6,
-    })
-    .png()
-    .toBuffer();
-}
-
-async function createDistanceFabricLayer(
-  swatchBuffer: Buffer,
-  width: number,
-  height: number,
-): Promise<Buffer> {
-  const avg = await sharp(swatchBuffer)
-    .resize(1, 1)
-    .removeAlpha()
-    .raw()
-    .toBuffer();
-
-  const [r, g, b] = avg;
-
-  const baseColour = await sharp({
-    create: {
-      width,
-      height,
-      channels: 3,
-      background: {
-        r: r ?? 128,
-        g: g ?? 128,
-        b: b ?? 128,
-      },
-    },
-  })
-    .png()
-    .toBuffer();
-
-  const stretchedSwatch = await sharp(swatchBuffer)
-    .resize(width, height, {
-      fit: "fill",
-    })
-    .blur(6)
-    .modulate({
-      brightness: 1.01,
-      saturation: 1.04,
-    })
-    .png()
-    .toBuffer();
-
-  const softenedVariation = await sharp(stretchedSwatch)
-    .greyscale()
-    .blur(3)
-    .linear(0.08, 0)
-    .png()
-    .toBuffer();
-
-  return sharp(baseColour)
-    .composite([
-      {
-        input: softenedVariation,
-        blend: "soft-light",
-      },
-    ])
-    .modulate({
-      brightness: 1.01,
-      saturation: 1.03,
-    })
-    .png()
-    .toBuffer();
-}
-
-function slugify(value: string) {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
+import { runGeneration } from "../utils/generation-core.server";
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
@@ -555,323 +24,122 @@ export async function action({ request }: ActionFunctionArgs) {
 
     const formData = await request.formData();
 
-    const productId = formData.get("productId");
-    const zoneId = formData.get("zoneId");
-    const swatchFile = formData.get("swatch");
-    const swatchUrlRaw = formData.get("swatchUrl");
+    const shopifyProductId = formData.get("productId") as string | null;
+    const zoneId           = formData.get("zoneId")    as string | null;
+    const swatchFile       = formData.get("swatch");
+    const swatchUrlRaw     = formData.get("swatchUrl")       as string | null;
+    const fabricFamilyRaw  = formData.get("fabricFamily")    as string | null;
+    const colourNameRaw    = formData.get("colourName")      as string | null;
+    const swatchIdRaw      = formData.get("swatchId")        as string | null;
+    const productTitleRaw  = formData.get("productTitle")    as string | null;
+    const imageUrlRaw      = formData.get("productImageUrl") as string | null;
 
-    const fabricFamilyRaw = formData.get("fabricFamily");
-    const colourNameRaw = formData.get("colourName");
-    const swatchIdRaw = formData.get("swatchId");
-
-    const fabricFamily =
-      typeof fabricFamilyRaw === "string" && fabricFamilyRaw.trim()
-        ? fabricFamilyRaw.trim()
-        : "Uncategorised";
-
-    const colourName =
-      typeof colourNameRaw === "string" && colourNameRaw.trim()
-        ? colourNameRaw.trim()
-        : `Colour-${Date.now()}`;
-
-    const swatchId =
-      typeof swatchIdRaw === "string" && swatchIdRaw.trim()
-        ? swatchIdRaw.trim()
-        : null;
-
-    const swatchUrl =
-      typeof swatchUrlRaw === "string" && swatchUrlRaw.trim()
-        ? swatchUrlRaw.trim()
-        : null;
-
-    if (!productId || typeof productId !== "string") {
+    if (!shopifyProductId) {
       return Response.json({ error: "Missing product ID" }, { status: 400 });
     }
-
-    const safeProduct = safeFolderName(productId);
-
-    if (!zoneId || typeof zoneId !== "string") {
+    if (!zoneId) {
       return Response.json({ error: "Missing zone ID" }, { status: 400 });
     }
 
-    // Accept EITHER an uploaded file OR a URL to an existing image (e.g. from Shopify Files)
-    const hasFile = swatchFile instanceof File && swatchFile.size > 0;
+    const fabricFamily = fabricFamilyRaw?.trim() || "Uncategorised";
+    const colourName   = colourNameRaw?.trim()   || `Colour-${Date.now()}`;
+    const swatchId     = swatchIdRaw?.trim()     || null;
+    const swatchUrl    = swatchUrlRaw?.trim()    || null;
+    const hasFile      = swatchFile instanceof File && swatchFile.size > 0;
 
     if (!hasFile && !swatchUrl) {
       return Response.json(
-        { error: "Missing swatch. Either upload a file or pick one from Shopify Files." },
+        { error: "Missing swatch. Upload a file or pick one from saved swatches." },
         { status: 400 },
       );
     }
 
+    // ── Auth / billing check ─────────────────────────────────────────────────
     const shop = await getOrCreateShop(shopDomain);
 
-    const { previewLimit } = await getCurrentBillingPlan(admin);
+    const { previewLimit, apiSucceeded } = await getCurrentBillingPlan(admin);
     const usage = await syncShopUsage({
       shopId: shop.id,
       previewLimit,
       resetExpiredCycle: true,
+      updateLimit: apiSucceeded,
     });
 
-if (usage.previewCount >= usage.previewLimit) {
-  return Response.json(
-    { error: "Preview limit reached for this billing cycle." },
-    { status: 403 },
-  );
-}
-
-    const product = await prisma.product.findFirst({
-      where: {
-        shopId: shop.id,
-        shopifyProductId: productId,
-      },
-    });
-
-    if (!product) {
-      return Response.json(
-        { error: "Product not found in database. Save a zone first." },
-        { status: 404 },
-      );
-    }
-
-    const zone = await prisma.zone.findFirst({
-      where: {
-        id: zoneId,
-        shopId: shop.id,
-        productId: product.id,
-      },
-    });
-
-    if (!zone) {
-      return Response.json({ error: "Surface zone not found" }, { status: 404 });
-    }
-
-    if (!product.imageUrl) {
-      return Response.json(
-        { error: "Product base image URL is missing in database." },
-        { status: 400 },
-      );
-    }
-
-    if (!zone.maskPath) {
-      return Response.json(
-        { error: "Zone mask path is missing in database." },
-        { status: 400 },
-      );
-    }
-
-    const baseResponse = await fetch(product.imageUrl);
-    if (!baseResponse.ok) {
-      return Response.json(
-        { error: "Could not download base image" },
-        { status: 500 },
-      );
-    }
-
-    const baseBuffer = Buffer.from(await baseResponse.arrayBuffer());
-
-    // Load swatch from file upload OR from URL (Shopify Files / recent swatch)
-    let swatchBuffer: Buffer;
-
-    if (hasFile) {
-      swatchBuffer = Buffer.from(await (swatchFile as File).arrayBuffer());
-    } else if (swatchUrl) {
-      const swatchResponse = await fetch(swatchUrl);
-      if (!swatchResponse.ok) {
-        return Response.json(
-          { error: "Could not download swatch image from URL" },
-          { status: 500 },
-        );
-      }
-      swatchBuffer = Buffer.from(await swatchResponse.arrayBuffer());
-    } else {
-      return Response.json({ error: "Missing swatch" }, { status: 400 });
-    }
-
-    let rawMaskBuffer: Buffer;
-    if (zone.maskPath.startsWith("http")) {
-      const maskResponse = await fetch(zone.maskPath);
-      if (!maskResponse.ok) {
-        return Response.json({ error: "Could not download mask image" }, { status: 500 });
-      }
-      rawMaskBuffer = Buffer.from(await maskResponse.arrayBuffer());
-    } else {
-      const { default: fs } = await import("node:fs/promises");
-      const { default: path } = await import("node:path");
-      rawMaskBuffer = await fs.readFile(
-        path.join(process.cwd(), "public", zone.maskPath.replace(/^\/+/, "")),
-      );
-    }
-
-    const baseMeta = await sharp(baseBuffer).metadata();
-    const width = baseMeta.width || 1200;
-    const height = baseMeta.height || 1200;
-
-    const maskBuffer = await createProcessedMask(rawMaskBuffer, width, height);
-
-    const tileScale = 0.14;
-    const blendStrength = 0.75;
-
-    const finalComposite = await buildRealisticComposite({
-      baseBuffer,
-      swatchBuffer,
-      maskBuffer,
-      width,
-      height,
-      tileScale,
-      blendStrength,
-      fabricFamily,
-      colourName,
-    });
-
-    const finalWebpBuffer = await sharp(finalComposite)
-      .webp({ quality: 90 })
-      .toBuffer();
-
-    const safeFamily = slugify(fabricFamily);
-    const safeColour = slugify(colourName);
-
-    const storagePath = [
-      shop.shopDomain,
-      "products",
-      safeProduct,
-      "zones",
-      zone.id,
-      `${safeFamily}__${safeColour}.webp`,
-    ].join("/");
-
-    const uploaded = await uploadBufferToStorage({
-      path: storagePath,
-      buffer: finalWebpBuffer,
-      contentType: "image/webp",
-      upsert: true,
-    });
-
-    // Auto-save / update the swatch record so it appears in "Recently used"
-    // We always upload a copy of the swatch to our own storage so it survives
-    // even if the merchant deletes the original Shopify File.
-    let savedSwatchId: string | null = swatchId;
-
-    try {
-      const swatchStoragePath = [
-        shop.shopDomain,
-        "swatches",
-        `${safeFamily}__${safeColour}.png`,
-      ].join("/");
-
-      const savedSwatchImage = await uploadBufferToStorage({
-        path: swatchStoragePath,
-        buffer: swatchBuffer,
-        contentType: "image/png",
-        upsert: true,
-      });
-
-      const savedSwatch = await prisma.swatch.upsert({
-        where: {
-          shopId_fabricFamily_colourName: {
-            shopId: shop.id,
-            fabricFamily,
-            colourName,
-          },
-        },
-        update: {
-          imagePath: savedSwatchImage.path,
-          imageUrl: savedSwatchImage.publicUrl,
-        },
-        create: {
-          shopId: shop.id,
-          fabricFamily,
-          colourName,
-          imagePath: savedSwatchImage.path,
-          imageUrl: savedSwatchImage.publicUrl,
-        },
-      });
-
-      savedSwatchId = savedSwatch.id;
-    } catch (swatchSaveError) {
-      // Don't fail the whole request if swatch saving has trouble
-      console.error("Failed to auto-save swatch:", swatchSaveError);
-    }
-
-    const preview = await prisma.preview.upsert({
-      where: {
-        productId_zoneId_fabricFamily_colourName: {
-          productId: product.id,
-          zoneId: zone.id,
-          fabricFamily,
-          colourName,
-        },
-      },
-      update: {
-        swatchId: savedSwatchId,
-        imagePath: uploaded.path,
-        imageUrl: uploaded.publicUrl,
-        width,
-        height,
-      },
-      create: {
-        shopId: shop.id,
-        productId: product.id,
-        zoneId: zone.id,
-        swatchId: savedSwatchId,
-        shopifyProductId: productId,
-        fabricFamily,
-        colourName,
-        imagePath: uploaded.path,
-        imageUrl: uploaded.publicUrl,
-        width,
-        height,
-        status: "DRAFT",
-        approvedForStorefront: false,
-        featured: false,
-      },
-    });
-
-    // ── SEO Engine: update fabric_colours metafield if add-on is active ──
-    // Fire-and-forget: errors are caught inside the utility and never throw.
-    // Note: newly generated previews start as DRAFT, so the metafield value
-    // won't include this colour until the merchant approves it. This call still
-    // ensures the metafield is kept in sync if a re-generate replaced an
-    // existing approved image.
-    if (isSeoAddonActive(shop)) {
-      void updateFabricColoursMetafield(admin, productId, product.id);
-    }
-
-    const limitEnforcement = await prisma.shopUsage.updateMany({
-      where: { shopId: shop.id, previewCount: { lt: usage.previewLimit } },
-      data: { previewCount: { increment: 1 } },
-    });
-    if (limitEnforcement.count === 0) {
+    if (usage.previewCount >= usage.previewLimit) {
       return Response.json(
         { error: "Preview limit reached for this billing cycle." },
         { status: 403 },
       );
     }
 
+    // ── Ensure product exists in DB ──────────────────────────────────────────
+    const product = await upsertProduct({
+      shopId: shop.id,
+      shopifyProductId,
+      title: productTitleRaw ?? null,
+      imageUrl: imageUrlRaw ?? null,
+    });
+
+    // ── Get swatch buffer ────────────────────────────────────────────────────
+    let swatchBuffer: Buffer;
+    if (hasFile) {
+      swatchBuffer = Buffer.from(await (swatchFile as File).arrayBuffer());
+    } else {
+      const res = await fetch(swatchUrl!);
+      if (!res.ok) {
+        return Response.json({ error: "Could not download swatch from URL" }, { status: 500 });
+      }
+      swatchBuffer = Buffer.from(await res.arrayBuffer());
+    }
+
+    // ── Run generation ───────────────────────────────────────────────────────
+    // runGeneration handles: base image fetch, mask fetch & processing, composite
+    // building, storage upload, swatch save, and preview DB upsert.
+    const result = await runGeneration({
+      shopId:           shop.id,
+      shopDomain,
+      productId:        product.id,
+      zoneId,
+      shopifyProductId,
+      fabricFamily,
+      colourName,
+      swatchBuffer,
+      swatchId,
+    });
+
+    // ── Increment usage count ────────────────────────────────────────────────
+    const limitEnforcement = await prisma.shopUsage.updateMany({
+      where: { shopId: shop.id, previewCount: { lt: usage.previewLimit } },
+      data:  { previewCount: { increment: 1 } },
+    });
+    if (limitEnforcement.count === 0) {
+      // Limit was hit between the check and now — generation still saved, just not counted
+      console.warn(`[generate-preview] usage limit hit post-generation for shop=${shop.id}`);
+    }
+
+    // ── SEO metafield update (fire-and-forget) ───────────────────────────────
+    if (isSeoAddonActive(shop)) {
+      void updateFabricColoursMetafield(admin, shopifyProductId, product.id);
+    }
+
     return Response.json({
       success: true,
       preview: {
-        id: preview.id,
+        id:                   result.previewId,
         zoneId,
-        url: uploaded.publicUrl,
-        imageUrl: uploaded.publicUrl,
-        fabricFamily: preview.fabricFamily,
-        colourName: preview.colourName,
-        approvedForStorefront: preview.approvedForStorefront,
-        featured: preview.featured,
-        status: preview.status,
+        url:                  result.previewUrl,
+        imageUrl:             result.previewUrl,
+        fabricFamily:         result.fabricFamily,
+        colourName:           result.colourName,
+        approvedForStorefront: false,
+        featured:             false,
+        status:               "DRAFT",
       },
     });
   } catch (error) {
     console.error("api.generate-preview error:", error);
-
     return Response.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown error generating preview",
-      },
+      { error: error instanceof Error ? error.message : "Unknown error generating preview" },
       { status: 500 },
     );
   }
