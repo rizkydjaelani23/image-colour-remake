@@ -28,6 +28,75 @@ export interface GenerationParams {
   swatchBuffer: Buffer;
   /** Existing swatch DB id (if re-generating from a saved swatch) */
   swatchId?: string | null;
+
+  // ── Optional pre-fetched shared buffers (provided by worker cache) ─────────
+  // When set, runGeneration skips the network fetches and mask processing for
+  // the base image and mask — huge win when many colours share the same zone.
+  preloadedBaseBuffer?: Buffer;
+  preloadedWidth?: number;
+  preloadedHeight?: number;
+  preloadedMaskBuffer?: Buffer; // already processed by createProcessedMask
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Exported helper — lets the worker pre-fetch shared resources once per zone
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ZoneBuffers = {
+  baseBuffer: Buffer;
+  width: number;
+  height: number;
+  maskBuffer: Buffer; // already processed
+};
+
+/**
+ * Fetches and processes the base image + mask for a product/zone pair.
+ * The worker calls this once per unique product:zone and caches the result
+ * so all colour jobs for that zone share the same buffers.
+ */
+export async function prefetchZoneBuffers(
+  productId: string,
+  zoneId: string,
+): Promise<ZoneBuffers | null> {
+  try {
+    const [product, zone] = await Promise.all([
+      prisma.product.findUnique({ where: { id: productId } }),
+      prisma.zone.findUnique({ where: { id: zoneId } }),
+    ]);
+
+    if (!product?.imageUrl || !zone?.maskPath) return null;
+
+    // Fetch base image and raw mask in parallel
+    const [baseResponse, rawMaskBuffer] = await Promise.all([
+      fetch(product.imageUrl),
+      (async () => {
+        if (zone.maskPath!.startsWith("http")) {
+          const res = await fetch(zone.maskPath!);
+          if (!res.ok) throw new Error(`mask fetch failed: ${res.status}`);
+          return Buffer.from(await res.arrayBuffer());
+        }
+        const { default: fs }   = await import("node:fs/promises");
+        const { default: path } = await import("node:path");
+        return fs.readFile(
+          path.join(process.cwd(), "public", zone.maskPath!.replace(/^\/+/, "")),
+        );
+      })(),
+    ]);
+
+    if (!baseResponse.ok) return null;
+    const baseBuffer = Buffer.from(await baseResponse.arrayBuffer());
+
+    const meta   = await sharp(baseBuffer).metadata();
+    const width  = meta.width  || 1200;
+    const height = meta.height || 1200;
+
+    const maskBuffer = await createProcessedMask(rawMaskBuffer, width, height);
+
+    return { baseBuffer, width, height, maskBuffer };
+  } catch (err) {
+    console.error("[generation-core] prefetchZoneBuffers failed:", err);
+    return null;
+  }
 }
 
 export interface GenerationResult {
@@ -424,44 +493,64 @@ export async function runGeneration(
 
   await onProgress?.(10);
 
-  const product = await prisma.product.findUnique({ where: { id: productId } });
-  if (!product) throw new Error("Product not found");
-  if (!product.imageUrl) throw new Error("Product base image URL is missing");
+  // ── Use pre-fetched buffers from worker cache when available ──────────────
+  let baseBuffer: Buffer;
+  let width: number;
+  let height: number;
+  let maskBuffer: Buffer;
 
-  const zone = await prisma.zone.findUnique({ where: { id: zoneId } });
-  if (!zone) throw new Error("Zone not found");
-  if (!zone.maskPath) throw new Error("Zone mask path is missing");
-
-  // Fetch base image
-  const baseResponse = await fetch(product.imageUrl);
-  if (!baseResponse.ok) throw new Error("Could not download base image");
-  const baseBuffer = Buffer.from(await baseResponse.arrayBuffer());
-
-  await onProgress?.(20);
-
-  // Fetch mask
-  let rawMaskBuffer: Buffer;
-  if (zone.maskPath.startsWith("http")) {
-    const maskResponse = await fetch(zone.maskPath);
-    if (!maskResponse.ok) throw new Error("Could not download mask image");
-    rawMaskBuffer = Buffer.from(await maskResponse.arrayBuffer());
+  if (
+    params.preloadedBaseBuffer &&
+    params.preloadedMaskBuffer &&
+    params.preloadedWidth &&
+    params.preloadedHeight
+  ) {
+    // Fast path — shared buffers injected by the worker (no network fetches needed)
+    baseBuffer  = params.preloadedBaseBuffer;
+    maskBuffer  = params.preloadedMaskBuffer;
+    width       = params.preloadedWidth;
+    height      = params.preloadedHeight;
+    await onProgress?.(40); // jump straight to the composite step
   } else {
-    const { default: fs }   = await import("node:fs/promises");
-    const { default: path } = await import("node:path");
-    rawMaskBuffer = await fs.readFile(
-      path.join(process.cwd(), "public", zone.maskPath.replace(/^\/+/, "")),
-    );
+    // Slow path — fetch everything from scratch (used by the legacy sync route)
+    const product = await prisma.product.findUnique({ where: { id: productId } });
+    if (!product) throw new Error("Product not found");
+    if (!product.imageUrl) throw new Error("Product base image URL is missing");
+
+    const zone = await prisma.zone.findUnique({ where: { id: zoneId } });
+    if (!zone) throw new Error("Zone not found");
+    if (!zone.maskPath) throw new Error("Zone mask path is missing");
+
+    // Fetch base image and raw mask in parallel
+    const [baseResponse, rawMaskBuffer] = await Promise.all([
+      fetch(product.imageUrl),
+      (async () => {
+        if (zone.maskPath!.startsWith("http")) {
+          const res = await fetch(zone.maskPath!);
+          if (!res.ok) throw new Error("Could not download mask image");
+          return Buffer.from(await res.arrayBuffer());
+        }
+        const { default: fs }   = await import("node:fs/promises");
+        const { default: path } = await import("node:path");
+        return fs.readFile(
+          path.join(process.cwd(), "public", zone.maskPath!.replace(/^\/+/, "")),
+        );
+      })(),
+    ]);
+
+    if (!baseResponse.ok) throw new Error("Could not download base image");
+    baseBuffer = Buffer.from(await baseResponse.arrayBuffer());
+
+    await onProgress?.(20);
+
+    const baseMeta = await sharp(baseBuffer).metadata();
+    width  = baseMeta.width  || 1200;
+    height = baseMeta.height || 1200;
+
+    await onProgress?.(30);
+    maskBuffer = await createProcessedMask(rawMaskBuffer, width, height);
+    await onProgress?.(40);
   }
-
-  await onProgress?.(30);
-
-  const baseMeta = await sharp(baseBuffer).metadata();
-  const width    = baseMeta.width  || 1200;
-  const height   = baseMeta.height || 1200;
-
-  const maskBuffer = await createProcessedMask(rawMaskBuffer, width, height);
-
-  await onProgress?.(40);
 
   const tileScale     = 0.14;
   const blendStrength = 0.75;

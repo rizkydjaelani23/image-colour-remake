@@ -4,14 +4,24 @@
  * Design:
  *  - One async loop per shop, stored in `activeWorkers` map.
  *  - Different shops never block each other.
- *  - Jobs within a shop run sequentially (oldest first).
+ *  - Jobs within a shop run CONCURRENTLY (up to CONCURRENCY at a time).
+ *  - Base image + processed mask are fetched ONCE per product:zone and
+ *    reused across all colour jobs for that zone — huge speedup for bulk runs.
  *  - On server startup, stuck PROCESSING jobs are reset to PENDING and
  *    workers are restarted for any shops with pending work.
  *  - No Redis, no external queue — just the DB and Node.js async tasks.
  */
 
 import prisma from "./db.server";
-import { runGeneration } from "./generation-core.server";
+import { runGeneration, prefetchZoneBuffers } from "./generation-core.server";
+import type { ZoneBuffers } from "./generation-core.server";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** How many jobs to process concurrently per shop */
+const CONCURRENCY = 4;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module-level state (persists across requests in the same Node.js process)
@@ -79,27 +89,60 @@ function kickOffWorker(shopId: string): void {
 }
 
 async function runWorkerLoop(shopId: string): Promise<void> {
+  // Cache shared buffers (base image + processed mask) per product:zone.
+  // Lives for the duration of this worker loop run — avoids re-downloading
+  // the same large image and re-processing the same mask for every colour
+  // in a bulk run.
+  const bufferCache = new Map<string, ZoneBuffers>();
+
   while (true) {
-    // Grab the oldest pending job for this shop
-    const job = await prisma.generationJob.findFirst({
+    // Grab up to CONCURRENCY pending jobs at once (oldest first)
+    const jobs = await prisma.generationJob.findMany({
       where: { shopId, status: "PENDING" },
       orderBy: { createdAt: "asc" },
+      take: CONCURRENCY,
     });
 
-    if (!job) break; // no more work — exit loop, worker will be GC'd
+    if (jobs.length === 0) break; // no more work — exit, worker will be GC'd
 
-    await processJob(job.id);
+    // Claim all grabbed jobs atomically before doing any work
+    await prisma.generationJob.updateMany({
+      where: { id: { in: jobs.map((j) => j.id) }, status: "PENDING" },
+      data: { status: "PROCESSING", startedAt: new Date(), progress: 5 },
+    });
+
+    // Identify unique product:zone combos in this batch that aren't cached yet
+    const missingKeys = new Set<string>();
+    for (const job of jobs) {
+      const key = `${job.productId}:${job.zoneId}`;
+      if (!bufferCache.has(key)) missingKeys.add(key);
+    }
+
+    // Pre-fetch shared buffers in parallel (base image + processed mask, once per zone)
+    if (missingKeys.size > 0) {
+      await Promise.all(
+        Array.from(missingKeys).map(async (key) => {
+          const [productId, zoneId] = key.split(":");
+          const buffers = await prefetchZoneBuffers(productId, zoneId);
+          if (buffers) {
+            bufferCache.set(key, buffers);
+            console.log(`[worker] cached buffers for ${key} (${buffers.width}×${buffers.height})`);
+          }
+        }),
+      );
+    }
+
+    // Process all jobs in this batch concurrently
+    console.log(`[worker] shop=${shopId} processing batch of ${jobs.length} job(s) concurrently`);
+    await Promise.all(jobs.map((job) => processJob(job, bufferCache)));
   }
 }
 
-async function processJob(jobId: string): Promise<void> {
-  // Mark as processing
-  const job = await prisma.generationJob.update({
-    where: { id: jobId },
-    data: { status: "PROCESSING", startedAt: new Date(), progress: 5 },
-  });
-
-  console.log(`[worker] shop=${job.shopId} job=${jobId} → PROCESSING (${job.fabricFamily} / ${job.colourName})`);
+async function processJob(
+  job: { id: string; shopId: string; productId: string; zoneId: string; shopifyProductId: string; fabricFamily: string; colourName: string; swatchUrl: string; swatchId: string | null },
+  bufferCache: Map<string, ZoneBuffers>,
+): Promise<void> {
+  console.log(`[worker] shop=${job.shopId} job=${job.id} → PROCESSING (${job.fabricFamily} / ${job.colourName})`);
 
   try {
     // Fetch the swatch buffer from its R2 URL
@@ -116,22 +159,31 @@ async function processJob(jobId: string): Promise<void> {
     });
     if (!shop) throw new Error(`Shop ${job.shopId} not found`);
 
+    // Pull pre-fetched shared buffers from cache (if available)
+    const cacheKey = `${job.productId}:${job.zoneId}`;
+    const shared   = bufferCache.get(cacheKey);
+
     const result = await runGeneration(
       {
-        shopId:          job.shopId,
-        shopDomain:      shop.shopDomain,
-        productId:       job.productId,
-        zoneId:          job.zoneId,
+        shopId:           job.shopId,
+        shopDomain:       shop.shopDomain,
+        productId:        job.productId,
+        zoneId:           job.zoneId,
         shopifyProductId: job.shopifyProductId,
-        fabricFamily:    job.fabricFamily,
-        colourName:      job.colourName,
+        fabricFamily:     job.fabricFamily,
+        colourName:       job.colourName,
         swatchBuffer,
-        swatchId:        job.swatchId,
+        swatchId:         job.swatchId,
+        // Inject pre-fetched shared buffers — skips base image + mask fetch/processing
+        preloadedBaseBuffer:  shared?.baseBuffer,
+        preloadedWidth:       shared?.width,
+        preloadedHeight:      shared?.height,
+        preloadedMaskBuffer:  shared?.maskBuffer,
       },
       async (pct) => {
         // Persist progress to DB so the polling endpoint can reflect it
         await prisma.generationJob.update({
-          where: { id: jobId },
+          where: { id: job.id },
           data: { progress: pct },
         });
       },
@@ -146,13 +198,13 @@ async function processJob(jobId: string): Promise<void> {
       });
       if (limitEnforcement.count === 0) {
         // Limit was hit — the preview was saved but we won't count it
-        console.warn(`[worker] job=${jobId} usage limit reached after generation`);
+        console.warn(`[worker] job=${job.id} usage limit reached after generation`);
       }
     }
 
     // Mark done
     await prisma.generationJob.update({
-      where: { id: jobId },
+      where: { id: job.id },
       data: {
         status:      "DONE",
         progress:    100,
@@ -162,13 +214,13 @@ async function processJob(jobId: string): Promise<void> {
       },
     });
 
-    console.log(`[worker] job=${jobId} → DONE  url=${result.previewUrl}`);
+    console.log(`[worker] job=${job.id} → DONE  url=${result.previewUrl}`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[worker] job=${jobId} → FAILED: ${message}`);
+    console.error(`[worker] job=${job.id} → FAILED: ${message}`);
 
     await prisma.generationJob.update({
-      where: { id: jobId },
+      where: { id: job.id },
       data: {
         status:       "FAILED",
         errorMessage: message,
