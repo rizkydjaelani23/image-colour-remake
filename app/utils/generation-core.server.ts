@@ -123,12 +123,15 @@ export function slugify(value: string) {
 }
 
 /**
- * Properly tiles a swatch across a canvas using Sharp's built-in tile composite.
- * tileScale = fraction of the shorter image dimension for one tile.
- * e.g. 0.06 on a 1200px image → 72px tiles, ~16 repeats across → fine fabric grain.
+ * Tiles a swatch across a canvas using a two-pass half-offset technique to hide seams.
  *
- * Previously the code resized a tile then STRETCHED it to fill — that's what caused
- * the "zoomed-in blobs" effect. This function REPEATS the tile instead.
+ * Sharp's tile:true simply repeats the image — if the swatch has any edge shadow or
+ * vignetting you'd see a grid. The fix: tile TWO copies, one offset by half a tile
+ * in both x and y (with wrap), blended at 50% each. The seam of pass-1 falls on
+ * the centre of pass-2's tile (no seam there), and vice versa — they cancel out.
+ *
+ * tileScale = fraction of the shorter image dimension per tile repeat.
+ * 0.06 on a 1200px image → 72px tiles → ~16 repeats across → fine fabric grain.
  */
 async function createTiledTexture(
   swatchBuffer: Buffer,
@@ -137,17 +140,53 @@ async function createTiledTexture(
   tileScale = 0.06,
 ): Promise<Buffer> {
   const tileSize = Math.max(48, Math.round(Math.min(width, height) * tileScale));
+  const half     = Math.floor(tileSize / 2);
 
+  // Base tile at the target size
   const tile = await sharp(swatchBuffer)
     .resize(tileSize, tileSize, { fit: "cover" })
     .png()
     .toBuffer();
 
-  // tile: true repeats the input across the full canvas (Sharp ≥ 0.28)
-  return sharp({
-    create: { width, height, channels: 3, background: { r: 0, g: 0, b: 0 } },
+  // ── Build a phase-shifted copy (offset by half tile in both x and y, with wrap) ──
+  // Technique: place 4 copies in a 2×tileSize grid, extract the centre region.
+  // The extract gives exactly a cyclic shift of the original by (half, half).
+  const shiftedRaw = await sharp({
+    create: {
+      width:    tileSize * 2,
+      height:   tileSize * 2,
+      channels: 3,
+      background: { r: 0, g: 0, b: 0 },
+    },
   })
-    .composite([{ input: tile, tile: true, blend: "over" }])
+    .composite([
+      { input: tile, left: 0,        top: 0 },
+      { input: tile, left: tileSize, top: 0 },
+      { input: tile, left: 0,        top: tileSize },
+      { input: tile, left: tileSize, top: tileSize },
+    ])
+    .extract({ left: half, top: half, width: tileSize, height: tileSize })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  // Set the shifted tile to 50% opacity so blending with the base layer is a true average.
+  // This is a tiny buffer (tileSize² × 4 bytes — e.g. 72×72×4 ≈ 20 KB), not expensive.
+  const halfAlpha = Buffer.from(shiftedRaw.data);
+  for (let i = 3; i < halfAlpha.length; i += 4) halfAlpha[i] = 128;
+
+  const shiftedHalf = await sharp(halfAlpha, { raw: shiftedRaw.info }).png().toBuffer();
+
+  // Pass 1: tile the original at full opacity.
+  // Pass 2: tile the phase-shifted copy at 50% opacity on top.
+  // → every pixel is the average of two offset grid systems → seams hidden.
+  return sharp({
+    create: { width, height, channels: 3, background: { r: 128, g: 128, b: 128 } },
+  })
+    .composite([
+      { input: tile,        tile: true, blend: "over" },
+      { input: shiftedHalf, tile: true, blend: "over" },
+    ])
     .png()
     .toBuffer();
 }
