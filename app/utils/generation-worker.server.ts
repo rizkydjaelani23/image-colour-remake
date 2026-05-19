@@ -21,9 +21,10 @@ import type { ZoneBuffers } from "./generation-core.server";
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** How many jobs to process concurrently per shop.
- *  2 gives good throughput while keeping peak CPU pressure low enough
- *  that the server stays responsive for mask edits / zone saves. */
-const CONCURRENCY = 2;
+ *  4 gives good throughput. The blocking JS pixel loops now yield via setImmediate
+ *  every 100k pixels, so the event loop stays responsive for mask edits / zone saves
+ *  even with 4 concurrent jobs. */
+const CONCURRENCY = 4;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module-level state (persists across requests in the same Node.js process)

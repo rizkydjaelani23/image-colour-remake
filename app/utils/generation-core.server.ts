@@ -123,70 +123,33 @@ export function slugify(value: string) {
 }
 
 /**
- * Tiles a swatch across a canvas using a two-pass half-offset technique to hide seams.
- *
- * Sharp's tile:true simply repeats the image — if the swatch has any edge shadow or
- * vignetting you'd see a grid. The fix: tile TWO copies, one offset by half a tile
- * in both x and y (with wrap), blended at 50% each. The seam of pass-1 falls on
- * the centre of pass-2's tile (no seam there), and vice versa — they cancel out.
+ * Tiles a swatch across a canvas at fine grain scale.
  *
  * tileScale = fraction of the shorter image dimension per tile repeat.
- * 0.06 on a 1200px image → 72px tiles → ~16 repeats across → fine fabric grain.
+ * 0.05 on a 1200px image → 60px tiles → ~20 repeats across → fine fabric grain.
+ *
+ * Seams: the overlay is processed without normalise() and with a very low linear
+ * coefficient (0.05–0.08), so any tile-boundary variation is imperceptible in the
+ * final composite. No two-pass seam hiding needed — that was slower and only
+ * necessary when normalise() was amplifying contrast to glaringly visible levels.
  */
 async function createTiledTexture(
   swatchBuffer: Buffer,
   width: number,
   height: number,
-  tileScale = 0.06,
+  tileScale = 0.05,
 ): Promise<Buffer> {
   const tileSize = Math.max(48, Math.round(Math.min(width, height) * tileScale));
-  const half     = Math.floor(tileSize / 2);
 
-  // Base tile at the target size
   const tile = await sharp(swatchBuffer)
     .resize(tileSize, tileSize, { fit: "cover" })
     .png()
     .toBuffer();
 
-  // ── Build a phase-shifted copy (offset by half tile in both x and y, with wrap) ──
-  // Technique: place 4 copies in a 2×tileSize grid, extract the centre region.
-  // The extract gives exactly a cyclic shift of the original by (half, half).
-  const shiftedRaw = await sharp({
-    create: {
-      width:    tileSize * 2,
-      height:   tileSize * 2,
-      channels: 3,
-      background: { r: 0, g: 0, b: 0 },
-    },
-  })
-    .composite([
-      { input: tile, left: 0,        top: 0 },
-      { input: tile, left: tileSize, top: 0 },
-      { input: tile, left: 0,        top: tileSize },
-      { input: tile, left: tileSize, top: tileSize },
-    ])
-    .extract({ left: half, top: half, width: tileSize, height: tileSize })
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  // Set the shifted tile to 50% opacity so blending with the base layer is a true average.
-  // This is a tiny buffer (tileSize² × 4 bytes — e.g. 72×72×4 ≈ 20 KB), not expensive.
-  const halfAlpha = Buffer.from(shiftedRaw.data);
-  for (let i = 3; i < halfAlpha.length; i += 4) halfAlpha[i] = 128;
-
-  const shiftedHalf = await sharp(halfAlpha, { raw: shiftedRaw.info }).png().toBuffer();
-
-  // Pass 1: tile the original at full opacity.
-  // Pass 2: tile the phase-shifted copy at 50% opacity on top.
-  // → every pixel is the average of two offset grid systems → seams hidden.
   return sharp({
     create: { width, height, channels: 3, background: { r: 128, g: 128, b: 128 } },
   })
-    .composite([
-      { input: tile,        tile: true, blend: "over" },
-      { input: shiftedHalf, tile: true, blend: "over" },
-    ])
+    .composite([{ input: tile, tile: true, blend: "over" }])
     .png()
     .toBuffer();
 }
@@ -339,7 +302,7 @@ async function createSoftTextureLayer(
   return sharp(tiled)
     .greyscale()
     // no normalise — preserves natural (low) swatch contrast, hides tile repeat
-    .blur(1.5) // extra blur to further smooth any residual tile boundary
+    .blur(0.8) // reduced from 1.5 — still smooths tile boundary, saves time
     .modulate({ brightness: 0.99, saturation: 0.6 })
     .png()
     .toBuffer();
@@ -422,28 +385,35 @@ export async function buildRealisticComposite(params: {
     mainFabricLayer = await createSmoothColourLayer(swatchBuffer, width, height);
   }
 
-  const softTextureLayer = await createSoftTextureLayer(swatchBuffer, width, height);
-
-  // Additional blur before the final linear() step to ensure no tile boundaries survive.
-  const softenedTextureForBlend = await sharp(softTextureLayer).blur(2.0).png().toBuffer();
-  // Linear maps the texture to a narrow range near neutral soft-light grey (128).
-  // Lower coefficient = more subtle sheen, less visible tile pattern.
-  // smooth-colour: 0.05 around 122 → values 122-134, barely perceptible shimmer
-  // soft-texture:  0.08 around 116 → slightly more depth for suede/cotton
-  const textureLight = await sharp(softenedTextureForBlend)
-    .linear(renderMode === "smooth-colour" ? 0.05 : 0.08, renderMode === "smooth-colour" ? 122 : 116)
-    .png()
-    .toBuffer();
+  // Texture layer: only needed for soft-texture fabrics.
+  // For smooth-colour (plush/velvet/mink) the linear coefficient was 0.05 — barely
+  // perceptible shimmer — so we skip it entirely and save 3+ Sharp passes per job.
+  let textureLight: Buffer | null = null;
+  if (renderMode !== "smooth-colour") {
+    const softTextureLayer = await createSoftTextureLayer(swatchBuffer, width, height);
+    // Reduced blur: 2.0 → 1.0 — still removes tile boundaries, faster
+    const softenedTextureForBlend = await sharp(softTextureLayer).blur(1.0).png().toBuffer();
+    // Linear maps the texture to a narrow range near neutral soft-light grey (128).
+    // 0.08 around 116 → subtle depth for suede/cotton without visible tile pattern.
+    textureLight = await sharp(softenedTextureForBlend)
+      .linear(0.08, 116)
+      .png()
+      .toBuffer();
+  }
 
   const maskedLightingForBlend = renderMode === "smooth-colour"
     ? await sharp(maskedLighting).linear(0.55, 58).png().toBuffer()
     : maskedLighting;
 
+  const compositeInputs: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [
+    { input: maskedLightingForBlend, blend: "soft-light" },
+  ];
+  if (textureLight) {
+    compositeInputs.push({ input: textureLight, blend: "soft-light" });
+  }
+
   const colouredFabric = await sharp(mainFabricLayer)
-    .composite([
-      { input: maskedLightingForBlend, blend: "soft-light" },
-      { input: textureLight, blend: "soft-light" },
-    ])
+    .composite(compositeInputs)
     .modulate({
       brightness: (renderMode === "smooth-colour" ? 0.87 : 0.91) * warmFactor, // was 0.93 / 0.99
       saturation: renderMode === "smooth-colour" ? 1.05 : 1.08,                // was 1.15 / 1.20
