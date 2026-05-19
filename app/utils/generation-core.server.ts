@@ -434,8 +434,9 @@ export async function buildRealisticComposite(params: {
   // This loop contains per-pixel conditional alpha logic that can't be expressed
   // purely in Sharp, so it must run in JS. We yield the event loop every CHUNK
   // pixels so the server can handle HTTP requests (mask saves, zone loads, etc.)
-  // while generation is in progress. A 1200×1200 image = ~1.44M pixels → ~14 yields.
-  const CHUNK = 100_000;
+  // while generation is in progress. A 1200×1200 image = ~1.44M pixels → ~144 yields.
+  // Smaller chunk = more frequent yields = snappier page navigation during generation.
+  const CHUNK = 10_000;
 
   for (let i = 0; i < width * height; i++) {
     const idx = i * 4;
