@@ -329,14 +329,17 @@ async function createSoftTextureLayer(
   width: number,
   height: number,
 ): Promise<Buffer> {
-  // Use proper tiling at 6% scale — fine grain, ~16 repeats across a 1200px image.
-  // Old code used tileSwatchToSize at 18% then stretched, giving ~5 "tiles" that
-  // looked like zoomed blobs. Now each repeat is ~72px → realistic fabric texture.
-  const tiled = await createTiledTexture(swatchBuffer, width, height, 0.06);
+  // Tile at 5% scale — fine grain, ~20 repeats across a 1200px image.
+  // NO normalise: normalise() was amplifying the swatch photo's internal lighting
+  // gradients to the full 0-255 range, making the tile repeat glaringly visible
+  // as a rectangular grid on the bed. We want the texture contrast to stay at
+  // whatever level the swatch naturally has, then the linear() step in
+  // buildRealisticComposite compresses it further to a very subtle overlay.
+  const tiled = await createTiledTexture(swatchBuffer, width, height, 0.05);
   return sharp(tiled)
     .greyscale()
-    .normalise()
-    .blur(0.5) // was 0.8 — tile is already at correct scale, less softening needed
+    // no normalise — preserves natural (low) swatch contrast, hides tile repeat
+    .blur(1.5) // extra blur to further smooth any residual tile boundary
     .modulate({ brightness: 0.99, saturation: 0.6 })
     .png()
     .toBuffer();
@@ -371,14 +374,16 @@ async function createDistanceFabricLayer(
   // Now: tile repeats at 6% scale → fine, realistic surface texture.
   const tiledTexture = await createTiledTexture(swatchBuffer, width, height, 0.06);
 
-  // Step 3: extract greyscale luminance variation from the tiled texture
-  // (normalise maps the full 0-255 range → picks up actual texture contrast)
+  // Step 3: extract greyscale luminance variation from the tiled texture.
+  // NO normalise: same reason as createSoftTextureLayer — normalise() blows up
+  // any lighting gradient in the swatch photo to full 0-255, making the tile
+  // grid blatantly visible. Keep natural swatch contrast and compress with linear().
   const lumVariation = await sharp(tiledTexture)
     .greyscale()
-    .normalise()
-    .blur(0.5)
-    .linear(0.18, 0) // subtle: keeps texture contrast low so colour stays accurate
-    .png()
+    // no normalise — keeps tile-pattern contrast low
+    .blur(1.5)
+    .linear(0.08, 0) // was 0.18 — much more subtle; soft-light at these low values
+    .png()            // creates a gentle sheen rather than visible patches
     .toBuffer();
 
   // Step 4: overlay texture as soft-light on the solid base colour
@@ -419,11 +424,14 @@ export async function buildRealisticComposite(params: {
 
   const softTextureLayer = await createSoftTextureLayer(swatchBuffer, width, height);
 
-  // was blur(2.4) — that was destroying the fine tiled grain we just created.
-  // Keep just enough softening to blend tile edges without losing texture scale.
-  const softenedTextureForBlend = await sharp(softTextureLayer).blur(0.8).png().toBuffer();
+  // Additional blur before the final linear() step to ensure no tile boundaries survive.
+  const softenedTextureForBlend = await sharp(softTextureLayer).blur(2.0).png().toBuffer();
+  // Linear maps the texture to a narrow range near neutral soft-light grey (128).
+  // Lower coefficient = more subtle sheen, less visible tile pattern.
+  // smooth-colour: 0.05 around 122 → values 122-134, barely perceptible shimmer
+  // soft-texture:  0.08 around 116 → slightly more depth for suede/cotton
   const textureLight = await sharp(softenedTextureForBlend)
-    .linear(renderMode === "smooth-colour" ? 0.10 : 0.15, renderMode === "smooth-colour" ? 118 : 109)
+    .linear(renderMode === "smooth-colour" ? 0.05 : 0.08, renderMode === "smooth-colour" ? 122 : 116)
     .png()
     .toBuffer();
 
