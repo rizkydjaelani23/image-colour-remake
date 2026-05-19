@@ -149,36 +149,14 @@ async function createProcessedMask(
   width: number,
   height: number,
 ): Promise<Buffer> {
-  const baseMask = await sharp(rawMaskBuffer)
+  // All Sharp — runs entirely in libuv worker threads, never blocks Node's event loop.
+  // sharp.median(3) is a 3×3 median filter: removes isolated white speckles and
+  // fills isolated black holes — equivalent to the old hand-written neighbor loop.
+  return sharp(rawMaskBuffer)
     .resize(width, height)
     .greyscale()
     .threshold(140)
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const data = Buffer.from(baseMask.data);
-  const cleaned = Buffer.from(data);
-
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      const i = y * width + x;
-      const value = data[i];
-
-      let whiteNeighbours = 0;
-      for (let oy = -1; oy <= 1; oy++) {
-        for (let ox = -1; ox <= 1; ox++) {
-          if (ox === 0 && oy === 0) continue;
-          const ni = (y + oy) * width + (x + ox);
-          if (data[ni] > 127) whiteNeighbours++;
-        }
-      }
-
-      if (value > 127 && whiteNeighbours <= 1) cleaned[i] = 0;
-      if (value <= 127 && whiteNeighbours >= 7) cleaned[i] = 255;
-    }
-  }
-
-  return sharp(cleaned, { raw: { width, height, channels: 1 } })
+    .median(3)      // replaces the blocking JS 8-neighbor cleaning loop
     .blur(1)
     .threshold(120)
     .blur(0.8)
@@ -192,26 +170,28 @@ async function extractMaskedLighting(
   width: number,
   height: number,
 ): Promise<Buffer> {
-  const baseGray = await sharp(baseBuffer)
-    .resize(width, height)
+  // Sharp's "multiply" blend computes: result = (base × overlay) / 255 per channel.
+  // Compositing greyscale-base × greyscale-mask is exactly: out = baseGray × mask / 255
+  // — the same as the old JS loop, but running entirely in libuv threads.
+  const [greyBase, greyMask] = await Promise.all([
+    sharp(baseBuffer)
+      .resize(width, height)
+      .greyscale()
+      .toColourspace("srgb") // promote to 3-ch so composite blend modes work
+      .png()
+      .toBuffer(),
+    sharp(maskBuffer)
+      .resize(width, height)
+      .greyscale()
+      .toColourspace("srgb")
+      .png()
+      .toBuffer(),
+  ]);
+
+  return sharp(greyBase)
+    .composite([{ input: greyMask, blend: "multiply" }])
     .greyscale()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const mask = await sharp(maskBuffer)
-    .resize(width, height)
-    .greyscale()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const out = Buffer.alloc(width * height);
-  for (let i = 0; i < width * height; i++) {
-    const m = mask.data[i] / 255;
-    out[i] = Math.round(baseGray.data[i] * m);
-  }
-
-  return sharp(out, { raw: { width, height, channels: 1 } })
-    .normalize()
+    .normalise()
     .blur(1)
     .png()
     .toBuffer();
@@ -399,11 +379,20 @@ export async function buildRealisticComposite(params: {
     .png()
     .toBuffer();
 
-  const baseRaw    = await sharp(baseBuffer).resize(width, height).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  const fabricRaw  = await sharp(colouredFabric).resize(width, height).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  const maskRaw    = await sharp(maskBuffer).resize(width, height).greyscale().blur(0.3).raw().toBuffer({ resolveWithObject: true });
+  // Fetch all three raw pixel arrays concurrently (all run in libuv threads)
+  const [baseRaw, fabricRaw, maskRaw] = await Promise.all([
+    sharp(baseBuffer).resize(width, height).ensureAlpha().raw().toBuffer({ resolveWithObject: true }),
+    sharp(colouredFabric).resize(width, height).ensureAlpha().raw().toBuffer({ resolveWithObject: true }),
+    sharp(maskBuffer).resize(width, height).greyscale().blur(0.3).raw().toBuffer({ resolveWithObject: true }),
+  ]);
 
   const out = Buffer.alloc(width * height * 4);
+
+  // This loop contains per-pixel conditional alpha logic that can't be expressed
+  // purely in Sharp, so it must run in JS. We yield the event loop every CHUNK
+  // pixels so the server can handle HTTP requests (mask saves, zone loads, etc.)
+  // while generation is in progress. A 1200×1200 image = ~1.44M pixels → ~14 yields.
+  const CHUNK = 100_000;
 
   for (let i = 0; i < width * height; i++) {
     const idx = i * 4;
@@ -466,6 +455,11 @@ export async function buildRealisticComposite(params: {
     out[idx + 1] = Math.max(0, Math.min(255, Math.round(ng * (1 - alpha) + fg * boost * alpha)));
     out[idx + 2] = Math.max(0, Math.min(255, Math.round(nb * (1 - alpha) + fb * boost * alpha)));
     out[idx + 3] = 255;
+
+    // Yield every CHUNK pixels so HTTP requests can be serviced between chunks
+    if (i > 0 && i % CHUNK === 0) {
+      await new Promise<void>((r) => setImmediate(r));
+    }
   }
 
   return sharp(out, { raw: { width, height, channels: 4 } }).png().toBuffer();

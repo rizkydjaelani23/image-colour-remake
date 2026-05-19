@@ -20,8 +20,10 @@ import type { ZoneBuffers } from "./generation-core.server";
 // Config
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** How many jobs to process concurrently per shop */
-const CONCURRENCY = 4;
+/** How many jobs to process concurrently per shop.
+ *  2 gives good throughput while keeping peak CPU pressure low enough
+ *  that the server stays responsive for mask edits / zone saves. */
+const CONCURRENCY = 2;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module-level state (persists across requests in the same Node.js process)
