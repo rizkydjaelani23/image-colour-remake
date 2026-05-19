@@ -298,9 +298,11 @@ export default function VisualiserPage() {
   const [maskLibrarySearch, setMaskLibrarySearch] = useState("");
 
   // ── Background generation job tracking ───────────────────────────────────
-  const [activeJobId, setActiveJobId]         = useState<string | null>(null);
+  const [activeJobId, setActiveJobId]             = useState<string | null>(null);
+  /** Shopify product GID that this job belongs to — guards against stale results on wrong product */
+  const [activeJobProductId, setActiveJobProductId] = useState<string | null>(null);
   const [activeJobProgress, setActiveJobProgress] = useState(0);
-  const [activeJobStatus, setActiveJobStatus] = useState<"PENDING" | "PROCESSING" | "DONE" | "FAILED" | null>(null);
+  const [activeJobStatus, setActiveJobStatus]     = useState<"PENDING" | "PROCESSING" | "DONE" | "FAILED" | null>(null);
   /** shopifyProductId → number of active (PENDING/PROCESSING) jobs */
   const [shopJobMap, setShopJobMap] = useState<Map<string, number>>(new Map());
 
@@ -345,6 +347,7 @@ export default function VisualiserPage() {
     setImageLoaded(false);
     // Clear job tracking for the previous product (job keeps running server-side)
     setActiveJobId(null);
+    setActiveJobProductId(null);
     setActiveJobProgress(0);
     setActiveJobStatus(null);
     setPreviewLoading(false);
@@ -864,35 +867,58 @@ export default function VisualiserPage() {
   }, []);
 
   // ── Poll active job progress ──────────────────────────────────────────────
+  // Only depends on activeJobId — does NOT re-run when status/progress changes
+  // (we use a stopped flag internally to halt polling once done/failed).
   useEffect(() => {
     if (!activeJobId) return;
-    if (activeJobStatus === "DONE" || activeJobStatus === "FAILED") return;
 
+    // Capture the product this job belongs to — used to guard stale updates
+    const jobProductId = activeJobProductId;
     let mounted = true;
+    let stopped = false;
+
     const poll = async () => {
+      if (!mounted || stopped) return;
       try {
         const res = await fetch(`/api/job-status?jobId=${encodeURIComponent(activeJobId)}`);
         if (!res.ok || !mounted) return;
         const { job } = await res.json() as { job?: { status: string; progress: number; previewUrl?: string; errorMessage?: string } };
         if (!job || !mounted) return;
-        setActiveJobProgress(job.progress);
+
+        setActiveJobProgress(job.progress ?? 0);
         setActiveJobStatus(job.status as "PENDING" | "PROCESSING" | "DONE" | "FAILED");
-        if (job.status === "DONE" && job.previewUrl) {
-          setGeneratedPreviewUrl(job.previewUrl);
+
+        if (job.status === "DONE") {
+          stopped = true;
           setPreviewLoading(false);
-          loadRecentSwatches();
+          if (job.previewUrl) {
+            // Only update the preview image if this job still belongs to the current product
+            setSelectedProductId((currentPid) => {
+              if (currentPid === jobProductId) {
+                setGeneratedPreviewUrl(job.previewUrl ?? null);
+                loadRecentSwatches();
+              }
+              return currentPid; // no change to selectedProductId
+            });
+          }
         } else if (job.status === "FAILED") {
-          setPreviewError(job.errorMessage || "Generation failed. Please try again.");
+          stopped = true;
           setPreviewLoading(false);
+          setSelectedProductId((currentPid) => {
+            if (currentPid === jobProductId) {
+              setPreviewError(job.errorMessage || "Generation failed. Please try again.");
+            }
+            return currentPid;
+          });
         }
       } catch { /* ignore transient poll errors */ }
     };
 
-    poll(); // poll immediately
+    poll(); // poll immediately on mount
     const interval = setInterval(poll, 2500);
-    return () => { mounted = false; clearInterval(interval); };
+    return () => { mounted = false; stopped = true; clearInterval(interval); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeJobId, activeJobStatus]);
+  }, [activeJobId]); // ← intentionally omit activeJobProductId/status — captured in closure
 
   // ── Poll shop-wide active jobs (for product picker badges) ────────────────
   useEffect(() => {
@@ -985,6 +1011,7 @@ export default function VisualiserPage() {
     setPreviewError(null);
     setGeneratedPreviewUrl(null);
     setActiveJobId(null);
+    setActiveJobProductId(null);
     setActiveJobProgress(0);
     setActiveJobStatus(null);
 
@@ -1037,6 +1064,7 @@ export default function VisualiserPage() {
       ) {
         // Job queued — polling effect will pick up from here
         setActiveJobId((data as { jobId: string }).jobId);
+        setActiveJobProductId(product.id); // Shopify GID — guards stale results
         setActiveJobStatus("PENDING");
       } else {
         throw new Error("Job ID was not returned by the server.");
@@ -1452,6 +1480,50 @@ const stepTextStyle: CSSProperties = {
   <div style={pageWrapStyle}>
       {/* Pulse animation for generating badge */}
       <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`}</style>
+
+      {/* ── Floating "generating in background" banner ───────────────────── */}
+      {activeJobId && activeJobStatus !== "DONE" && activeJobStatus !== "FAILED" && (
+        <div style={{
+          position: "fixed",
+          bottom: "24px",
+          right: "24px",
+          zIndex: 9999,
+          background: "#1e1b4b",
+          color: "#fff",
+          borderRadius: "12px",
+          padding: "14px 18px",
+          boxShadow: "0 4px 24px rgba(0,0,0,0.28)",
+          minWidth: "260px",
+          maxWidth: "340px",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <div style={{
+              width: "10px", height: "10px", borderRadius: "50%", background: "#818cf8", flexShrink: 0,
+              animation: "pulse 1.5s infinite",
+            }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: "13px" }}>
+                {activeJobStatus === "PROCESSING"
+                  ? `Generating colour preview… ${activeJobProgress}%`
+                  : "Preview queued…"}
+              </div>
+              <div style={{ fontSize: "11px", color: "#a5b4fc", marginTop: "3px" }}>
+                You can keep working while this finishes
+              </div>
+            </div>
+          </div>
+          {/* Progress bar */}
+          <div style={{ marginTop: "10px", borderRadius: "4px", background: "rgba(255,255,255,0.15)", height: "5px", overflow: "hidden" }}>
+            <div style={{
+              height: "100%",
+              width: `${activeJobProgress}%`,
+              background: "#818cf8",
+              transition: "width 0.5s ease",
+            }} />
+          </div>
+        </div>
+      )}
+
       <div style={{ marginBottom: "24px" }}>
         <h1 style={{ marginBottom: "8px" }}>Product Setup</h1>
         <p style={{ margin: 0, color: "#555", maxWidth: "780px", lineHeight: 1.5 }}>
