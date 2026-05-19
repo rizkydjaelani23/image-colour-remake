@@ -344,9 +344,13 @@ async function createDistanceFabricLayer(
   const lumVariation = await sharp(tiledTexture)
     .greyscale()
     // no normalise — keeps tile-pattern contrast low
-    .blur(1.5)
-    .linear(0.08, 0) // was 0.18 — much more subtle; soft-light at these low values
-    .png()            // creates a gentle sheen rather than visible patches
+    .blur(2.5) // increased from 1.5 — smears any tile edge before the linear step
+    // linear(0.03, 125): maps all values to 125–133, hugging soft-light neutral (128).
+    // Previously (0.08, 0) mapped to 0–20 — all below neutral — causing every tile
+    // boundary to show as a dark rectangular seam. Now the variation is ±4 around
+    // neutral, completely invisible as a repeating grid.
+    .linear(0.03, 125)
+    .png()
     .toBuffer();
 
   // Step 4: overlay texture as soft-light on the solid base colour
@@ -406,7 +410,7 @@ export async function buildRealisticComposite(params: {
     // in soft-light, creating strong blotchy patches from tufting shadows/highlights.
     // Now maps to a 50-value range near neutral (128), preserving gentle depth
     // without the uneven patches.
-    ? await sharp(maskedLighting).linear(0.20, 108).png().toBuffer()
+    ? await sharp(maskedLighting).linear(0.14, 111).png().toBuffer()
     : maskedLighting;
 
   const compositeInputs: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [
