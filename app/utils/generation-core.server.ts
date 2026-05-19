@@ -122,26 +122,44 @@ export function slugify(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
+/**
+ * Properly tiles a swatch across a canvas using Sharp's built-in tile composite.
+ * tileScale = fraction of the shorter image dimension for one tile.
+ * e.g. 0.06 on a 1200px image → 72px tiles, ~16 repeats across → fine fabric grain.
+ *
+ * Previously the code resized a tile then STRETCHED it to fill — that's what caused
+ * the "zoomed-in blobs" effect. This function REPEATS the tile instead.
+ */
+async function createTiledTexture(
+  swatchBuffer: Buffer,
+  width: number,
+  height: number,
+  tileScale = 0.06,
+): Promise<Buffer> {
+  const tileSize = Math.max(48, Math.round(Math.min(width, height) * tileScale));
+
+  const tile = await sharp(swatchBuffer)
+    .resize(tileSize, tileSize, { fit: "cover" })
+    .png()
+    .toBuffer();
+
+  // tile: true repeats the input across the full canvas (Sharp ≥ 0.28)
+  return sharp({
+    create: { width, height, channels: 3, background: { r: 0, g: 0, b: 0 } },
+  })
+    .composite([{ input: tile, tile: true, blend: "over" }])
+    .png()
+    .toBuffer();
+}
+
+/** @deprecated — kept for reference; use createTiledTexture instead */
 async function tileSwatchToSize(
   swatchBuffer: Buffer,
   width: number,
   height: number,
   tileScale = 0.2,
 ): Promise<Buffer> {
-  const targetSize = Math.max(120, Math.round(width * tileScale));
-
-  const base = await sharp(swatchBuffer)
-    .resize(targetSize, targetSize, { fit: "cover" })
-    .blur(1.2)
-    .modulate({ brightness: 0.97, saturation: 1.01 })
-    .png()
-    .toBuffer();
-
-  return sharp(base)
-    .resize(width, height, { fit: "fill" })
-    .blur(1.2)
-    .png()
-    .toBuffer();
+  return createTiledTexture(swatchBuffer, width, height, tileScale);
 }
 
 async function createProcessedMask(
@@ -272,11 +290,14 @@ async function createSoftTextureLayer(
   width: number,
   height: number,
 ): Promise<Buffer> {
-  const tiled = await tileSwatchToSize(swatchBuffer, width, height, 0.18);
+  // Use proper tiling at 6% scale — fine grain, ~16 repeats across a 1200px image.
+  // Old code used tileSwatchToSize at 18% then stretched, giving ~5 "tiles" that
+  // looked like zoomed blobs. Now each repeat is ~72px → realistic fabric texture.
+  const tiled = await createTiledTexture(swatchBuffer, width, height, 0.06);
   return sharp(tiled)
     .greyscale()
     .normalise()
-    .blur(0.8)
+    .blur(0.5) // was 0.8 — tile is already at correct scale, less softening needed
     .modulate({ brightness: 0.99, saturation: 0.6 })
     .png()
     .toBuffer();
@@ -287,12 +308,12 @@ async function createDistanceFabricLayer(
   width: number,
   height: number,
 ): Promise<Buffer> {
+  // Step 1: accurate flat base colour from 1×1 average of the swatch
   const avg = await sharp(swatchBuffer)
     .resize(1, 1)
     .removeAlpha()
     .raw()
     .toBuffer();
-
   const [r, g, b] = avg;
 
   const baseColour = await sharp({
@@ -306,23 +327,26 @@ async function createDistanceFabricLayer(
     .png()
     .toBuffer();
 
-  const stretchedSwatch = await sharp(swatchBuffer)
-    .resize(width, height, { fit: "fill" })
-    .blur(6)
-    .modulate({ brightness: 0.95, saturation: 1.01 }) // was 1.01 / 1.04
-    .png()
-    .toBuffer();
+  // Step 2: properly tiled texture — NOT stretched.
+  // Previously: swatch was stretched to full size + blur(6) → huge blotchy patches.
+  // Now: tile repeats at 6% scale → fine, realistic surface texture.
+  const tiledTexture = await createTiledTexture(swatchBuffer, width, height, 0.06);
 
-  const softenedVariation = await sharp(stretchedSwatch)
+  // Step 3: extract greyscale luminance variation from the tiled texture
+  // (normalise maps the full 0-255 range → picks up actual texture contrast)
+  const lumVariation = await sharp(tiledTexture)
     .greyscale()
-    .blur(3)
-    .linear(0.08, 0)
+    .normalise()
+    .blur(0.5)
+    .linear(0.18, 0) // subtle: keeps texture contrast low so colour stays accurate
     .png()
     .toBuffer();
 
+  // Step 4: overlay texture as soft-light on the solid base colour
+  // soft-light at ~50% grey = neutral, above = lighten, below = darken
   return sharp(baseColour)
-    .composite([{ input: softenedVariation, blend: "soft-light" }])
-    .modulate({ brightness: 0.95, saturation: 1.01 }) // was 1.01 / 1.03
+    .composite([{ input: lumVariation, blend: "soft-light" }])
+    .modulate({ brightness: 0.95, saturation: 1.01 })
     .png()
     .toBuffer();
 }
@@ -356,7 +380,9 @@ export async function buildRealisticComposite(params: {
 
   const softTextureLayer = await createSoftTextureLayer(swatchBuffer, width, height);
 
-  const softenedTextureForBlend = await sharp(softTextureLayer).blur(2.4).png().toBuffer();
+  // was blur(2.4) — that was destroying the fine tiled grain we just created.
+  // Keep just enough softening to blend tile edges without losing texture scale.
+  const softenedTextureForBlend = await sharp(softTextureLayer).blur(0.8).png().toBuffer();
   const textureLight = await sharp(softenedTextureForBlend)
     .linear(renderMode === "smooth-colour" ? 0.10 : 0.15, renderMode === "smooth-colour" ? 118 : 109)
     .png()
