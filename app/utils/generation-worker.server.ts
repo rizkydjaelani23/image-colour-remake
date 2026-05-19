@@ -46,6 +46,17 @@ export async function enqueueShop(shopId: string): Promise<void> {
   kickOffWorker(shopId);
 }
 
+/**
+ * Call this from any server loader that runs on page load (e.g. the visualiser
+ * loader) so that after a Railway restart, stuck PENDING jobs are picked back
+ * up automatically without needing a new job to be queued first.
+ *
+ * Idempotent — after the first call in a process lifetime this returns in <1ms.
+ */
+export async function ensureWorkersRunning(): Promise<void> {
+  await initOnce();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal
 // ─────────────────────────────────────────────────────────────────────────────

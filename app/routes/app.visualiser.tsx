@@ -4,6 +4,7 @@ import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
 import { getOrCreateShop } from "../utils/shop.server";
+import { ensureWorkersRunning } from "../utils/generation-worker.server";
 import type { CSSProperties } from "react";
 
 type ProductStatus = "ACTIVE" | "DRAFT" | "ARCHIVED";
@@ -74,6 +75,12 @@ type ListZonesResponse = {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
   const shop = await getOrCreateShop(session.shop);
+
+  // Kick off workers for any shops with PENDING jobs after a server restart.
+  // No-op after the first call in a process lifetime (< 1ms overhead).
+  ensureWorkersRunning().catch((err) =>
+    console.error("[loader] ensureWorkersRunning failed:", err),
+  );
 
   // Fetch ALL Shopify products for the custom picker using cursor pagination.
   // Shopify caps each request at 250 — we loop until hasNextPage is false.
