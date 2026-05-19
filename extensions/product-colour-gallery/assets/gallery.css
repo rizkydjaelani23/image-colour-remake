@@ -163,8 +163,11 @@
   transition: opacity 0.2s ease;
 }
 
-/* Hide img until src is set — the white card acts as the placeholder */
-.pcg-card img[src=""] {
+/* Hide img until it finishes loading — pcg-lazy is removed by JS onload/onerror.
+   Using a class selector (not src="") so the rule stays active after lazyLoadImages
+   sets the real src but before the image bytes arrive — prevents broken-image
+   flashes on mobile when images are still downloading. */
+.pcg-card img.pcg-lazy {
   opacity: 0;
 }
 

@@ -1,5 +1,11 @@
 (function () {
 
+  // ── Transparent 1×1 GIF placeholder ─────────────────────────────────────
+  // Using a valid data-URI instead of src="" prevents mobile browsers from
+  // making a GET request to the current page URL (which returns HTML, not an
+  // image, causing a persistent broken-image state on Chrome/Safari mobile).
+  var BLANK_GIF = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+
   // ── Lazy / eager image loader ─────────────────────────────────────────────
   // activeObservers tracks every IntersectionObserver we create so we can
   // disconnect them all before rebuilding the DOM (family tab change / toggle).
@@ -11,6 +17,19 @@
     activeObservers = [];
   }
 
+  // Load a single lazy image — sets src from data-src and clears the attribute.
+  // Keeps pcg-lazy class (and thus opacity:0) until the image actually loads so we
+  // never flash a broken-image icon on mobile. Removes the class on success/error
+  // so the CSS transition fades the image in when ready.
+  function loadImg(img) {
+    var src = img.dataset.src;
+    if (!src) return;
+    img.removeAttribute("data-src");
+    img.onload  = function () { img.classList.remove("pcg-lazy"); };
+    img.onerror = function () { img.classList.remove("pcg-lazy"); };
+    img.src = src;
+  }
+
   function lazyLoadImages(container, eagerCount) {
     eagerCount = eagerCount || 4;
     const imgs = Array.from(container.querySelectorAll("img.pcg-lazy"));
@@ -18,12 +37,8 @@
 
     imgs.forEach((img, i) => {
       if (i < eagerCount) {
-        const src = img.dataset.src;
-        if (src) {
-          img.src = src;
-          img.removeAttribute("data-src");
-          if (i === 0) img.setAttribute("fetchpriority", "high");
-        }
+        if (i === 0) img.setAttribute("fetchpriority", "high");
+        loadImg(img);
         return;
       }
       if ("IntersectionObserver" in window) {
@@ -31,21 +46,16 @@
           (entries) => {
             entries.forEach((entry) => {
               if (!entry.isIntersecting) return;
-              const el = entry.target;
-              const src = el.dataset.src;
-              if (src) { el.src = src; el.removeAttribute("data-src"); }
-              observer.unobserve(el);
+              loadImg(entry.target);
+              observer.unobserve(entry.target);
             });
           },
-          { rootMargin: "80px" }
+          { rootMargin: "120px" }  // slightly larger margin gives mobile more time to load
         );
         observer.observe(img);
         activeObservers.push(observer);
       } else {
-        setTimeout(() => {
-          const src = img.dataset.src;
-          if (src) { img.src = src; img.removeAttribute("data-src"); }
-        }, (i - eagerCount) * 60);
+        setTimeout(() => { loadImg(img); }, (i - eagerCount) * 60);
       }
     });
   }
@@ -540,8 +550,8 @@
                       >
                         <img
                           class="pcg-lazy"
-                          src=""
-                          data-src="${escapeAttr(shopifyImgUrl(item.imageUrl, 120))}"
+                          src="${BLANK_GIF}"
+                          data-src="${escapeAttr(item.imageUrl || "")}"
                           alt="${escapeHtml(seoAlt(item.colourName))}"
                           decoding="async"
                           width="90"
