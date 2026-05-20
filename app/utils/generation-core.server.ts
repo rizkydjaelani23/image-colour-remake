@@ -392,41 +392,24 @@ export async function buildRealisticComposite(params: {
 
   // ── Texture layer ─────────────────────────────────────────────────────────
   //
-  // smooth-colour (plush / velvet / mink):
-  //   Tile the swatch at 6% scale (~72px on 1200px = ~17 repeats).
-  //   CLAHE (adaptive local histogram equalization) normalises contrast within
-  //   each 72px tile independently — this strips out the large-scale photography
-  //   gradient (circular highlight / vignetting visible in the raw swatch photo)
-  //   while preserving the fine crushed-velvet light/dark pattern that defines
-  //   the fabric's look. linear(0.35, 83) centres the range around soft-light
-  //   neutral (128 → 127.8) with ±45 spread so the crushed texture is clearly
-  //   visible on every fabric colour.
+  // smooth-colour (plush / velvet / mink): NO tile overlay.
+  //   Every tiling approach we tried eventually showed a visible grid on
+  //   lighter/brighter colours because the swatch photo is never perfectly
+  //   uniform — normalise() or strong linear() amplifies whatever internal
+  //   lighting gradient the swatch has, creating a repeating rectangular
+  //   pattern.  Plush/velvet fabrics have a smooth, uniform appearance anyway;
+  //   their visual character comes from the base colour + the lighting
+  //   interaction with the headboard shape, not from a surface weave pattern.
+  //   maskedLighting (see below) handles all depth and structural variation.
   //
-  // soft-texture (suede / venice): unchanged — 5% tile + greyscale + linear.
+  // soft-texture (suede / venice): 5% tile + greyscale + gentle linear.
+  //   These fabrics genuinely have a visible woven/napped surface, and the
+  //   lower linear coefficient (0.08) keeps the repeat subtle enough to avoid
+  //   the grid problem.
   let textureLight: Buffer | null = null;
   if (renderMode === "smooth-colour") {
-    // ── Crushed-velvet texture for plush/velvet/mink ──────────────────────────
-    // Tile at 4% scale (~48px on 1200px = ~25 repeats).
-    //
-    // Seam hiding sequence:
-    //   1. blur(5) BEFORE normalise — spreads tile boundary discontinuities
-    //      across ~15px on each side so the step is no longer sharp.
-    //   2. normalise — re-expands whatever contrast survived the blur back to
-    //      the full 0-255 range (the swatch's crushed texture now fills that
-    //      range rather than just a narrow band of similar greys).
-    //   3. blur(2) AFTER normalise — final softening so any residual boundary
-    //      trace is below the perceptible threshold.
-    //   4. linear(0.22, 100) — centred at soft-light neutral (128×0.22+100=128),
-    //      range 100-156, clearly shows crushed velvet light/dark without a
-    //      visible grid.
-    //
-    // Note: CLAHE was tried but its width/height parameters are the NUMBER of
-    // tiles (not pixel size), so passing a pixel value created thousands of
-    // tiny normalised blocks — the source of the visible rectangular grid.
-    const tiled     = await createTiledTexture(swatchBuffer, width, height, 0.04);
-    const grey      = await sharp(tiled).greyscale().blur(5).png().toBuffer();
-    const normed    = await sharp(grey).normalise().blur(2).png().toBuffer();
-    textureLight    = await sharp(normed).linear(0.22, 100).png().toBuffer();
+    // No texture overlay — maskedLighting carries all structural depth.
+    textureLight = null;
   } else {
     const softTextureLayer = await createSoftTextureLayer(swatchBuffer, width, height);
     const softenedTextureForBlend = await sharp(softTextureLayer).blur(1.0).png().toBuffer();
@@ -436,15 +419,17 @@ export async function buildRealisticComposite(params: {
   const compositeInputs: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [];
 
   if (renderMode === "smooth-colour") {
-    // ── Single gentle lighting pass for smooth-colour ─────────────────────────
-    // The swatch texture (CLAHE crushed-velvet overlay above) now carries all
-    // the fabric's visual character. maskedLighting is reduced to a near-invisible
-    // structural whisper (blur=5, linear=0.06,120 → range 120-135, ±7 from neutral)
-    // so the source photo's large lighting blobs no longer bleed through as
-    // the dominant visual element. No structural pass — blobs eliminated.
+    // ── Lighting pass for smooth-colour ───────────────────────────────────────
+    // With no texture overlay, maskedLighting is the sole source of depth.
+    // blur(5) suppresses large studio-lamp blobs from the source photo while
+    // still preserving headboard panel seam shadows.
+    // linear(0.10, 115): range 115-138, ±~11 from soft-light neutral (128).
+    //   • Panel seam shadow (~30):  115 + 0.10×30  = 118  → slight darkening
+    //   • Studio lamp highlight (230): 115 + 0.10×230 = 138  → mild lightening
+    // Gentle enough to avoid blobs; strong enough to show the bed's shape.
     const broadLighting = await sharp(maskedLighting)
       .blur(5)
-      .linear(0.06, 120)
+      .linear(0.10, 115)
       .png()
       .toBuffer();
     compositeInputs.push({ input: broadLighting, blend: "soft-light" });
