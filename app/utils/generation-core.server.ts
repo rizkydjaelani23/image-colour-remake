@@ -516,63 +516,72 @@ export async function buildRealisticComposite(params: {
     const bg = baseRaw.data[idx + 1];
     const bb = baseRaw.data[idx + 2];
 
-    let fr = fabricRaw.data[idx];
-    let fg = fabricRaw.data[idx + 1];
-    let fb = fabricRaw.data[idx + 2];
+    const fr = fabricRaw.data[idx];
+    const fg = fabricRaw.data[idx + 1];
+    const fb = fabricRaw.data[idx + 2];
 
     if (maskValue < 0.01) {
       out[idx] = br; out[idx + 1] = bg; out[idx + 2] = bb; out[idx + 3] = 255;
       continue;
     }
 
-    const sourceLum    = 0.299 * br + 0.587 * bg + 0.114 * bb;
-    const fabricLumRaw = 0.299 * fr + 0.587 * fg + 0.114 * fb;
+    const lum = 0.299 * br + 0.587 * bg + 0.114 * bb;
 
-    const isBlackFabric     = fabricLumRaw < 25;
-    const isDarkFabric      = fabricLumRaw >= 25  && fabricLumRaw < 85;
-    const isMidLightFabric  = fabricLumRaw >= 130 && fabricLumRaw <= 160;
-    const isBrightFabric    = fabricLumRaw > 160  && fabricLumRaw <= 210;
-    const isNearWhiteFabric = fabricLumRaw > 210;
+    if (renderMode === "smooth-colour") {
+      // ── Multiplicative depth compositing ─────────────────────────────────────
+      //
+      // The old additive approach — fabric*alpha + base*(1-alpha) — caused blobs:
+      // the taupe/beige original bed's studio-lamp highlight bled its colour into
+      // saturated fabrics (red, purple, grey) as lighter pinkish/salmon patches.
+      // Any grey value from the base added to a low-saturation channel (G/B on red)
+      // was visible as a colour shift — there is no "gentle" tuning that fixes this.
+      //
+      // Fix: use the base luminance as a MULTIPLIER on the fabric colour instead of
+      // as an additive component. This means:
+      //   • Dark shadow areas (lum ≈ 20): multiply fabric by 0.80 → 20% darker ✓
+      //   • Mid / lit areas  (lum ≈ 128): multiply fabric by 1.00 → unchanged   ✓
+      //   • Studio lamp      (lum ≈ 220): capped to 128 → same as lit = 1.00   ✓
+      //     (lamp can NEVER add brightness — lighter blobs impossible by design)
+      //
+      // depthFactor = 0.80 + 0.20 * min(lum, 128) / 128  → range [0.80, 1.00]
+      // At full mask (maskValue=1): out = fabric * depthFactor — pure fabric + depth
+      // At mask edges (maskValue<1): blends smoothly into the background image
+      const cappedLum   = Math.min(lum, 128);
+      const depthFactor = 0.80 + 0.20 * (cappedLum / 128);
 
-    // Alpha controls how much of the fabric layer covers the base image.
-    // Lower values let more base shadow/depth show through — making the
-    // result look grounded rather than like a flat colour overlay.
-    // Reduced ~5-8% from previous values based on real-fabric comparison.
-    const alphaBase = renderMode === "smooth-colour"
-      ? (isBlackFabric     ? 0.78  // was 0.82
-       : isDarkFabric      ? 0.86  // was 0.91
-       : isMidLightFabric  ? 0.70  // was 0.74
-       : isNearWhiteFabric ? 0.68  // was 0.73
-       : isBrightFabric    ? 0.75  // was 0.80
-       : 0.83)                      // was 0.88
-      : blendStrength;
-    const alpha = Math.max(0, Math.min(1, maskValue * alphaBase));
+      out[idx]     = Math.max(0, Math.min(255, Math.round(br * (1 - maskValue) + fr * depthFactor * maskValue)));
+      out[idx + 1] = Math.max(0, Math.min(255, Math.round(bg * (1 - maskValue) + fg * depthFactor * maskValue)));
+      out[idx + 2] = Math.max(0, Math.min(255, Math.round(bb * (1 - maskValue) + fb * depthFactor * maskValue)));
+      out[idx + 3] = 255;
 
-    const lumCap = renderMode === "smooth-colour" ? 2.50 : 1.14;
-    if (fabricLumRaw > 10 && fabricLumRaw > sourceLum * lumCap) {
-      const lumScale = (sourceLum * lumCap) / fabricLumRaw;
-      fr = Math.min(255, Math.round(fr * lumScale));
-      fg = Math.min(255, Math.round(fg * lumScale));
-      fb = Math.min(255, Math.round(fb * lumScale));
+    } else {
+      // ── Additive alpha blending for soft-texture fabrics (unchanged) ──────────
+      let mfr = fr, mfg = fg, mfb = fb;
+      const fabricLumRaw = 0.299 * fr + 0.587 * fg + 0.114 * fb;
+      const sourceLum = lum;
+
+      const lumCap = 1.14;
+      if (fabricLumRaw > 10 && fabricLumRaw > sourceLum * lumCap) {
+        const lumScale = (sourceLum * lumCap) / fabricLumRaw;
+        mfr = Math.min(255, Math.round(fr * lumScale));
+        mfg = Math.min(255, Math.round(fg * lumScale));
+        mfb = Math.min(255, Math.round(fb * lumScale));
+      }
+
+      const alpha = Math.max(0, Math.min(1, maskValue * blendStrength));
+      const neutralMix = 0.65 * maskValue;
+      const nr = Math.round(br * (1 - neutralMix) + lum * neutralMix);
+      const ng = Math.round(bg * (1 - neutralMix) + lum * neutralMix);
+      const nb = Math.round(bb * (1 - neutralMix) + lum * neutralMix);
+
+      const finalLum = 0.299 * mfr + 0.587 * mfg + 0.114 * mfb;
+      const boost = finalLum < 115 ? 0.96 : 0.99;
+
+      out[idx]     = Math.max(0, Math.min(255, Math.round(nr * (1 - alpha) + mfr * boost * alpha)));
+      out[idx + 1] = Math.max(0, Math.min(255, Math.round(ng * (1 - alpha) + mfg * boost * alpha)));
+      out[idx + 2] = Math.max(0, Math.min(255, Math.round(nb * (1 - alpha) + mfb * boost * alpha)));
+      out[idx + 3] = 255;
     }
-
-    const lum = Math.round(0.299 * br + 0.587 * bg + 0.114 * bb);
-    const neutralMix = renderMode === "smooth-colour" ? 0.0 : 0.65 * maskValue;
-
-    const nr = Math.round(br * (1 - neutralMix) + lum * neutralMix);
-    const ng = Math.round(bg * (1 - neutralMix) + lum * neutralMix);
-    const nb = Math.round(bb * (1 - neutralMix) + lum * neutralMix);
-
-    const finalLum = 0.299 * fr + 0.587 * fg + 0.114 * fb;
-    const isDarkFabricFinal = finalLum < 115;
-    const boost = renderMode === "smooth-colour"
-      ? (isDarkFabricFinal ? 1.02 : 1.0)
-      : (isDarkFabricFinal ? 0.96 : 0.99);
-
-    out[idx]     = Math.max(0, Math.min(255, Math.round(nr * (1 - alpha) + fr * boost * alpha)));
-    out[idx + 1] = Math.max(0, Math.min(255, Math.round(ng * (1 - alpha) + fg * boost * alpha)));
-    out[idx + 2] = Math.max(0, Math.min(255, Math.round(nb * (1 - alpha) + fb * boost * alpha)));
-    out[idx + 3] = 255;
 
     // Yield every CHUNK pixels so HTTP requests can be serviced between chunks
     if (i > 0 && i % CHUNK === 0) {
