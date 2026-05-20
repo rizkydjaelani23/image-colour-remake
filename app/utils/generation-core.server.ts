@@ -208,11 +208,12 @@ async function extractMaskedLighting(
       .toBuffer(),
   ]);
 
+  // Return normalised but NOT blurred here — buildRealisticComposite applies
+  // two independent blurs (broad=3 for overall depth, structural=1 for seam lines).
   return sharp(greyBase)
     .composite([{ input: greyMask, blend: "multiply" }])
     .greyscale()
     .normalise()
-    .blur(3)   // increased from 1 — smooths tufting shadows into a gentle gradient
     .png()
     .toBuffer();
 }
@@ -405,17 +406,38 @@ export async function buildRealisticComposite(params: {
       .toBuffer();
   }
 
-  const maskedLightingForBlend = renderMode === "smooth-colour"
-    // Reduced from linear(0.55, 58) — that was mapping lighting to a 140-value range
-    // in soft-light, creating strong blotchy patches from tufting shadows/highlights.
-    // Now maps to a 50-value range near neutral (128), preserving gentle depth
-    // without the uneven patches.
-    ? await sharp(maskedLighting).linear(0.14, 111).png().toBuffer()
-    : maskedLighting;
+  const compositeInputs: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [];
 
-  const compositeInputs: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [
-    { input: maskedLightingForBlend, blend: "soft-light" },
-  ];
+  if (renderMode === "smooth-colour") {
+    // ── Two-pass lighting for smooth-colour (plush / velvet / mink) ──────────
+    //
+    // Pass 1 — Broad (blur=3): smooths tufting button holes into a gentle
+    //   overall gradient. linear(0.14, 111) maps 0-255 → 111-147, hugging
+    //   soft-light neutral (128). Fixes the old linear(0.55,58) blotchiness.
+    //
+    // Pass 2 — Structural (blur=1): light blur preserves sharp panel seam lines
+    //   and deep structural shadows. linear(0.20, 103) maps:
+    //     seams  (near   0) → 103  — 25 below neutral → clear visible shadow line
+    //     midtone (128)     → 128.6 ≈ neutral → zero effect on flat areas
+    //     tufting (near 255)→ 154  — 26 above neutral → subtle puff highlight
+    //   Net: seam lines show on every fabric tone including light taupe/mink,
+    //   without re-introducing the blotchy tufting patches (max +26 vs old +70).
+    const [broadLighting, structuralLighting] = await Promise.all([
+      sharp(maskedLighting).blur(3).linear(0.14, 111).png().toBuffer(),
+      sharp(maskedLighting).blur(1.0).linear(0.20, 103).png().toBuffer(),
+    ]);
+    compositeInputs.push(
+      { input: broadLighting,      blend: "soft-light" },
+      { input: structuralLighting, blend: "soft-light" },
+    );
+  } else {
+    // ── Single broad pass for soft-texture fabrics ────────────────────────────
+    // blur(3) smooths tufting; the full normalised range works here because the
+    // fabric's own tiled texture masks any residual tonal variation.
+    const broadLighting = await sharp(maskedLighting).blur(3).png().toBuffer();
+    compositeInputs.push({ input: broadLighting, blend: "soft-light" });
+  }
+
   if (textureLight) {
     compositeInputs.push({ input: textureLight, blend: "soft-light" });
   }
