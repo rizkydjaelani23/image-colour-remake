@@ -405,14 +405,28 @@ export async function buildRealisticComposite(params: {
   // soft-texture (suede / venice): unchanged — 5% tile + greyscale + linear.
   let textureLight: Buffer | null = null;
   if (renderMode === "smooth-colour") {
-    const tileSize = Math.max(48, Math.round(Math.min(width, height) * 0.06));
-    const tiled    = await createTiledTexture(swatchBuffer, width, height, 0.06);
-    const greyTiled = await sharp(tiled).greyscale().png().toBuffer();
-    const localNorm = await sharp(greyTiled)
-      .clahe({ width: tileSize, height: tileSize, maxSlope: 3 })
-      .png()
-      .toBuffer();
-    textureLight = await sharp(localNorm).linear(0.35, 83).png().toBuffer();
+    // ── Crushed-velvet texture for plush/velvet/mink ──────────────────────────
+    // Tile at 4% scale (~48px on 1200px = ~25 repeats).
+    //
+    // Seam hiding sequence:
+    //   1. blur(5) BEFORE normalise — spreads tile boundary discontinuities
+    //      across ~15px on each side so the step is no longer sharp.
+    //   2. normalise — re-expands whatever contrast survived the blur back to
+    //      the full 0-255 range (the swatch's crushed texture now fills that
+    //      range rather than just a narrow band of similar greys).
+    //   3. blur(2) AFTER normalise — final softening so any residual boundary
+    //      trace is below the perceptible threshold.
+    //   4. linear(0.22, 100) — centred at soft-light neutral (128×0.22+100=128),
+    //      range 100-156, clearly shows crushed velvet light/dark without a
+    //      visible grid.
+    //
+    // Note: CLAHE was tried but its width/height parameters are the NUMBER of
+    // tiles (not pixel size), so passing a pixel value created thousands of
+    // tiny normalised blocks — the source of the visible rectangular grid.
+    const tiled     = await createTiledTexture(swatchBuffer, width, height, 0.04);
+    const grey      = await sharp(tiled).greyscale().blur(5).png().toBuffer();
+    const normed    = await sharp(grey).normalise().blur(2).png().toBuffer();
+    textureLight    = await sharp(normed).linear(0.22, 100).png().toBuffer();
   } else {
     const softTextureLayer = await createSoftTextureLayer(swatchBuffer, width, height);
     const softenedTextureForBlend = await sharp(softTextureLayer).blur(1.0).png().toBuffer();
