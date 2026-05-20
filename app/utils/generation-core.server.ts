@@ -419,20 +419,53 @@ export async function buildRealisticComposite(params: {
   const compositeInputs: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [];
 
   if (renderMode === "smooth-colour") {
-    // ── Lighting pass for smooth-colour ───────────────────────────────────────
-    // With no texture overlay, maskedLighting is the sole source of depth.
-    // blur(5) suppresses large studio-lamp blobs from the source photo while
-    // still preserving headboard panel seam shadows.
-    // linear(0.10, 115): range 115-138, ±~11 from soft-light neutral (128).
-    //   • Panel seam shadow (~30):  115 + 0.10×30  = 118  → slight darkening
-    //   • Studio lamp highlight (230): 115 + 0.10×230 = 138  → mild lightening
-    // Gentle enough to avoid blobs; strong enough to show the bed's shape.
-    const broadLighting = await sharp(maskedLighting)
-      .blur(5)
-      .linear(0.10, 115)
+    // ── High-pass structural lighting (seam lines only — studio blobs eliminated) ──
+    //
+    // WHY blurs + linear failed: maskedLighting is dominated by the studio-lamp
+    // blob — a large (~300px), bright, smooth gradient.  No single blur level
+    // separates "preserve seam lines" from "kill blob" because they live in
+    // opposite ends of the spatial-frequency spectrum:
+    //   • Studio blob  → LOW frequency (broad, gradual) — kills at sigma ≥ 25
+    //   • Panel seams  → HIGH frequency (narrow, sharp) — survives at sigma ≤ 2
+    //
+    // High-pass = fine(σ=2) − coarse(σ=25) + 128
+    //   At a seam shadow (local dip vs surroundings):
+    //     fine ≈ 40  (seam still dark after σ=2)
+    //     coarse ≈ 170 (seam smeared into bright blob average)
+    //     diff = −130  →  val = 128 − 130×0.18 = 104  → soft-light DARKENS → visible seam ✓
+    //
+    //   In the smooth blob (gradual gradient):
+    //     fine ≈ 190  (local average)
+    //     coarse ≈ 185 (nearby average — almost the same for smooth features)
+    //     diff = +5   →  val = 128 + 5×0.18 = 129  → near-neutral → blob invisible ✓
+    //
+    // Edge bleeding (coarse blur averaging in black background pixels) is harmless
+    // because the pixel-level mask loop zeroes out all background pixels anyway.
+    const fineRaw   = await sharp(maskedLighting).blur(2).greyscale().raw().toBuffer();
+    const coarseRaw = await sharp(maskedLighting).blur(25).greyscale().raw().toBuffer();
+    const pixelCount = width * height;
+    const hpRgb = Buffer.alloc(pixelCount * 3);
+    for (let i = 0; i < pixelCount; i++) {
+      const diff = (fineRaw[i] as number) - (coarseRaw[i] as number);
+      const v = Math.max(0, Math.min(255, Math.round(128 + diff * 0.18)));
+      hpRgb[i * 3]     = v;
+      hpRgb[i * 3 + 1] = v;
+      hpRgb[i * 3 + 2] = v;
+    }
+    const structureLight = await sharp(hpRgb, { raw: { width, height, channels: 3 } })
       .png()
       .toBuffer();
-    compositeInputs.push({ input: broadLighting, blend: "soft-light" });
+
+    // Whisper of overall 3D depth — blur(25) kills blob variation, linear(0.03, 124)
+    // gives ±3 from neutral: edge vs centre barely noticeable, absolutely no blobs.
+    const broadLighting = await sharp(maskedLighting)
+      .blur(25)
+      .linear(0.03, 124)
+      .png()
+      .toBuffer();
+
+    compositeInputs.push({ input: broadLighting,  blend: "soft-light" });
+    compositeInputs.push({ input: structureLight, blend: "soft-light" });
   } else {
     // ── Single broad pass for soft-texture fabrics ────────────────────────────
     const broadLighting = await sharp(maskedLighting).blur(3).png().toBuffer();
