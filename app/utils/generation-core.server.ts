@@ -539,9 +539,20 @@ export async function buildRealisticComposite(params: {
       //   lamp highlight (lum=220) on red (fr=200): cappedBR=200, cappedBG=min(220,30)=30
       //     → blend can't push G or B above fabric values → no lighter pink blob ✓
       //
-      // 18% base (alphaBase=0.82) provides headboard shadow depth.
-      // High-pass seam-line overlay (from compositeInputs above) provides fine structure.
-      const alphaBase = 0.82;
+      // Adaptive alphaBase by fabric saturation:
+      //   Neutral fabrics (grey, mink, cream, white — satRange < 40):
+      //     alphaBase = 0.96 — only 4% base bleeds through. The broad luminance
+      //     variation of the original photo (lamp → shadow = ~180 units) is
+      //     compressed to ±4 units of depth, invisible as blobs. Seam lines come
+      //     from the high-pass overlay exclusively (25 units darkening on grey).
+      //   Mid-saturation fabrics (stone, blush — satRange 40-100):
+      //     alphaBase = 0.90 — 10% base for moderate depth. Partial saturation
+      //     hides residual blob variation from the base.
+      //   Saturated fabrics (red, blue, purple — satRange > 100):
+      //     alphaBase = 0.82 — 18% base for strong depth. High saturation masks
+      //     any remaining blob; cap-to-fabric prevents colour contamination.
+      const satRange = Math.max(fr, fg, fb) - Math.min(fr, fg, fb);
+      const alphaBase = satRange > 100 ? 0.82 : satRange > 40 ? 0.90 : 0.96;
       const cappedBR  = Math.min(lum, fr);
       const cappedBG  = Math.min(lum, fg);
       const cappedBB  = Math.min(lum, fb);
