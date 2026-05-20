@@ -390,20 +390,25 @@ export async function buildRealisticComposite(params: {
     mainFabricLayer = await createSmoothColourLayer(swatchBuffer, width, height);
   }
 
-  // Texture layer: only needed for soft-texture fabrics.
-  // For smooth-colour (plush/velvet/mink) the linear coefficient was 0.05 — barely
-  // perceptible shimmer — so we skip it entirely and save 3+ Sharp passes per job.
+  // ── Texture layer ─────────────────────────────────────────────────────────
+  // smooth-colour (plush/velvet/mink): fine microstructure tile at 2.5% scale
+  //   (~30px tiles on 1200px → ~40 repeats) gives a subtle plush grain/shimmer
+  //   without any visible tile seam. Previously skipped entirely which left
+  //   smooth-colour fabrics as a completely flat colour with no fabric character.
+  //
+  // soft-texture (suede/venice): tiled at 5% scale with greyscale + blur, same
+  //   as before.
   let textureLight: Buffer | null = null;
-  if (renderMode !== "smooth-colour") {
+  if (renderMode === "smooth-colour") {
+    const fineTile = await createTiledTexture(swatchBuffer, width, height, 0.025);
+    const greyFine = await sharp(fineTile).greyscale().blur(0.5).png().toBuffer();
+    // linear(0.06, 123): maps 0→123, 128→130.7, 255→138.3 — all within ±8 of
+    // soft-light neutral (128). Adds fine plush grain without a visible grid pattern.
+    textureLight = await sharp(greyFine).linear(0.06, 123).png().toBuffer();
+  } else {
     const softTextureLayer = await createSoftTextureLayer(swatchBuffer, width, height);
-    // Reduced blur: 2.0 → 1.0 — still removes tile boundaries, faster
     const softenedTextureForBlend = await sharp(softTextureLayer).blur(1.0).png().toBuffer();
-    // Linear maps the texture to a narrow range near neutral soft-light grey (128).
-    // 0.08 around 116 → subtle depth for suede/cotton without visible tile pattern.
-    textureLight = await sharp(softenedTextureForBlend)
-      .linear(0.08, 116)
-      .png()
-      .toBuffer();
+    textureLight = await sharp(softenedTextureForBlend).linear(0.08, 116).png().toBuffer();
   }
 
   const compositeInputs: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [];
@@ -411,20 +416,19 @@ export async function buildRealisticComposite(params: {
   if (renderMode === "smooth-colour") {
     // ── Two-pass lighting for smooth-colour (plush / velvet / mink) ──────────
     //
-    // Pass 1 — Broad (blur=3): smooths tufting button holes into a gentle
-    //   overall gradient. linear(0.14, 111) maps 0-255 → 111-147, hugging
-    //   soft-light neutral (128). Fixes the old linear(0.55,58) blotchiness.
+    // Pass 1 — Broad (blur=3): smooths large tufting blobs into a gentle overall
+    //   depth gradient. linear(0.14, 111): range 111-147, near soft-light neutral.
     //
-    // Pass 2 — Structural (blur=1): light blur preserves sharp panel seam lines
-    //   and deep structural shadows. linear(0.20, 103) maps:
-    //     seams  (near   0) → 103  — 25 below neutral → clear visible shadow line
-    //     midtone (128)     → 128.6 ≈ neutral → zero effect on flat areas
-    //     tufting (near 255)→ 154  — 26 above neutral → subtle puff highlight
-    //   Net: seam lines show on every fabric tone including light taupe/mink,
-    //   without re-introducing the blotchy tufting patches (max +26 vs old +70).
+    // Pass 2 — Structural (blur=2): moderate blur preserves panel seam lines
+    //   while suppressing the large organic tufting blobs more than blur=1 did.
+    //   linear(0.15, 98) is biased low so tufting highlights map near neutral:
+    //     seams  (after blur, ~30) → 102.5 (25 below neutral → clear shadow line)
+    //     midtone (128)            → 127.2 ≈ neutral → flat areas unaffected
+    //     tufting highlight (230)  → 132.5 (4 above neutral → barely perceptible)
+    //   Previously (blur=1, linear=0.20,103): tufting mapped to 154 → blotchy patches.
     const [broadLighting, structuralLighting] = await Promise.all([
       sharp(maskedLighting).blur(3).linear(0.14, 111).png().toBuffer(),
-      sharp(maskedLighting).blur(1.0).linear(0.20, 103).png().toBuffer(),
+      sharp(maskedLighting).blur(2.0).linear(0.15, 98).png().toBuffer(),
     ]);
     compositeInputs.push(
       { input: broadLighting,      blend: "soft-light" },
@@ -432,8 +436,6 @@ export async function buildRealisticComposite(params: {
     );
   } else {
     // ── Single broad pass for soft-texture fabrics ────────────────────────────
-    // blur(3) smooths tufting; the full normalised range works here because the
-    // fabric's own tiled texture masks any residual tonal variation.
     const broadLighting = await sharp(maskedLighting).blur(3).png().toBuffer();
     compositeInputs.push({ input: broadLighting, blend: "soft-light" });
   }
