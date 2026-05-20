@@ -447,7 +447,13 @@ export async function buildRealisticComposite(params: {
     const hpRgb = Buffer.alloc(pixelCount * 3);
     for (let i = 0; i < pixelCount; i++) {
       const diff = (fineRaw[i] as number) - (coarseRaw[i] as number);
-      const v = Math.max(0, Math.min(255, Math.round(128 + diff * 0.18)));
+      // Seam shadows = local DIPS below surroundings → always negative diff.
+      // Studio lamp highlights = local PEAKS above surroundings → always positive diff.
+      // By clamping positive diff to neutral (128) we block the lamp from ever
+      // creating lighter patches, while seam lines (negative diff) still darken.
+      const v = diff < 0
+        ? Math.max(0, Math.min(255, Math.round(128 + diff * 0.25)))
+        : 128;
       hpRgb[i * 3]     = v;
       hpRgb[i * 3 + 1] = v;
       hpRgb[i * 3 + 2] = v;
