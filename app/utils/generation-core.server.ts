@@ -452,7 +452,7 @@ export async function buildRealisticComposite(params: {
       // By clamping positive diff to neutral (128) we block the lamp from ever
       // creating lighter patches, while seam lines (negative diff) still darken.
       const v = diff < 0
-        ? Math.max(0, Math.min(255, Math.round(128 + diff * 0.25)))
+        ? Math.max(0, Math.min(255, Math.round(128 + diff * 0.40)))
         : 128;
       hpRgb[i * 3]     = v;
       hpRgb[i * 3 + 1] = v;
@@ -462,15 +462,7 @@ export async function buildRealisticComposite(params: {
       .png()
       .toBuffer();
 
-    // Whisper of overall 3D depth — blur(25) kills blob variation, linear(0.03, 124)
-    // gives ±3 from neutral: edge vs centre barely noticeable, absolutely no blobs.
-    const broadLighting = await sharp(maskedLighting)
-      .blur(25)
-      .linear(0.03, 124)
-      .png()
-      .toBuffer();
-
-    compositeInputs.push({ input: broadLighting,  blend: "soft-light" });
+    // structureLight only — broad depth comes from the cap-to-fabric pixel loop below.
     compositeInputs.push({ input: structureLight, blend: "soft-light" });
   } else {
     // ── Single broad pass for soft-texture fabrics ────────────────────────────
@@ -528,30 +520,39 @@ export async function buildRealisticComposite(params: {
     const lum = 0.299 * br + 0.587 * bg + 0.114 * bb;
 
     if (renderMode === "smooth-colour") {
-      // ── Multiplicative depth compositing ─────────────────────────────────────
+      // ── Cap-to-fabric greyscale depth blend ──────────────────────────────────
       //
-      // The old additive approach — fabric*alpha + base*(1-alpha) — caused blobs:
-      // the taupe/beige original bed's studio-lamp highlight bled its colour into
-      // saturated fabrics (red, purple, grey) as lighter pinkish/salmon patches.
-      // Any grey value from the base added to a low-saturation channel (G/B on red)
-      // was visible as a colour shift — there is no "gentle" tuning that fixes this.
+      // Original additive blending (fabric*α + base*(1-α)) caused colour-blob
+      // contamination: the taupe/beige base photo's studio lamp had high G and B
+      // values that bled into saturated fabrics (e.g. red where fg≈30), pushing
+      // those channels far above the fabric value → visible as lighter pinkish blobs.
       //
-      // Fix: use the base luminance as a MULTIPLIER on the fabric colour instead of
-      // as an additive component. This means:
-      //   • Dark shadow areas (lum ≈ 20): multiply fabric by 0.80 → 20% darker ✓
-      //   • Mid / lit areas  (lum ≈ 128): multiply fabric by 1.00 → unchanged   ✓
-      //   • Studio lamp      (lum ≈ 220): capped to 128 → same as lit = 1.00   ✓
-      //     (lamp can NEVER add brightness — lighter blobs impossible by design)
+      // Fix: convert the base to greyscale luminance, then cap each channel to the
+      // fabric value before blending:
+      //   cappedBR = min(lum, fr)
+      //   cappedBG = min(lum, fg)
+      //   cappedBB = min(lum, fb)
       //
-      // depthFactor = 0.80 + 0.20 * min(lum, 128) / 128  → range [0.80, 1.00]
-      // At full mask (maskValue=1): out = fabric * depthFactor — pure fabric + depth
-      // At mask edges (maskValue<1): blends smoothly into the background image
-      const cappedLum   = Math.min(lum, 128);
-      const depthFactor = 0.80 + 0.20 * (cappedLum / 128);
+      // Effect per pixel:
+      //   base lum < fabric channel → normal shadow darkening (design depth shows) ✓
+      //   base lum ≥ fabric channel → capped to fabric value → zero contamination ✓
+      //   lamp highlight (lum=220) on red (fr=200): cappedBR=200, cappedBG=min(220,30)=30
+      //     → blend can't push G or B above fabric values → no lighter pink blob ✓
+      //
+      // 18% base (alphaBase=0.82) provides headboard shadow depth.
+      // High-pass seam-line overlay (from compositeInputs above) provides fine structure.
+      const alphaBase = 0.82;
+      const cappedBR  = Math.min(lum, fr);
+      const cappedBG  = Math.min(lum, fg);
+      const cappedBB  = Math.min(lum, fb);
 
-      out[idx]     = Math.max(0, Math.min(255, Math.round(br * (1 - maskValue) + fr * depthFactor * maskValue)));
-      out[idx + 1] = Math.max(0, Math.min(255, Math.round(bg * (1 - maskValue) + fg * depthFactor * maskValue)));
-      out[idx + 2] = Math.max(0, Math.min(255, Math.round(bb * (1 - maskValue) + fb * depthFactor * maskValue)));
+      const depthR = fr * alphaBase + cappedBR * (1 - alphaBase);
+      const depthG = fg * alphaBase + cappedBG * (1 - alphaBase);
+      const depthB = fb * alphaBase + cappedBB * (1 - alphaBase);
+
+      out[idx]     = Math.max(0, Math.min(255, Math.round(br * (1 - maskValue) + depthR * maskValue)));
+      out[idx + 1] = Math.max(0, Math.min(255, Math.round(bg * (1 - maskValue) + depthG * maskValue)));
+      out[idx + 2] = Math.max(0, Math.min(255, Math.round(bb * (1 - maskValue) + depthB * maskValue)));
       out[idx + 3] = 255;
 
     } else {
