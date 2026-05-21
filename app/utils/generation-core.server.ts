@@ -379,6 +379,22 @@ export async function buildRealisticComposite(params: {
   const renderMode = getFabricRenderMode(fabricFamily, colourName);
   const warmFactor = await getSwatchWarmFactor(swatchBuffer);
 
+  // ── Neutral-mix for smooth-colour grey/silver fabrics ────────────────────
+  // The base photo is a warm taupe/beige studio shot. With the additive blend
+  // (neutralMix=0 for smooth-colour), 17% of the base RGB bleeds into the
+  // result, pushing grey fabric toward a warm beige cast. Fix: for neutral/
+  // low-saturation colours, shift the base contribution toward greyscale (lum)
+  // before blending — removes warm bleed without touching saturated colours.
+  //   swatchSat=0  (silver/grey) → smoothNeutralMix = 0.80 (mostly greyscale base)
+  //   swatchSat=30 (mink/stone)  → smoothNeutralMix ≈ 0.40 (half neutralised)
+  //   swatchSat≥60 (orange/red)  → smoothNeutralMix = 0    (raw base, no change)
+  const swatchAvgBuf = await sharp(swatchBuffer).resize(1, 1).removeAlpha().raw().toBuffer();
+  const [sAvgR, sAvgG, sAvgB] = [swatchAvgBuf[0] ?? 128, swatchAvgBuf[1] ?? 128, swatchAvgBuf[2] ?? 128];
+  const swatchSat = Math.max(sAvgR, sAvgG, sAvgB) - Math.min(sAvgR, sAvgG, sAvgB);
+  const smoothNeutralMix = renderMode === "smooth-colour"
+    ? Math.max(0, (60 - swatchSat) / 60) * 0.80
+    : 0;
+
   const maskedLighting = await extractMaskedLighting(baseBuffer, maskBuffer, width, height);
 
   let mainFabricLayer: Buffer;
@@ -494,11 +510,11 @@ export async function buildRealisticComposite(params: {
 
     const lum = Math.round(sourceLum);
 
-    // smooth-colour: blend directly onto the base (no greyscale neutral mix —
-    //   the maskedLighting overlay handles depth).
-    // soft-texture: shift base toward greyscale first so the fabric colour
-    //   sits naturally within the bed's existing shadow/highlight structure.
-    const neutralMix = renderMode === "smooth-colour" ? 0.0 : 0.65 * maskValue;
+    // smooth-colour: for neutral/grey fabrics shift the base toward greyscale
+    //   (smoothNeutralMix) so the warm studio lamp doesn't tint grey fabric.
+    //   Fully saturated colours keep smoothNeutralMix=0 (raw base, no change).
+    // soft-texture: always shift 65% toward greyscale for natural depth.
+    const neutralMix = renderMode === "smooth-colour" ? smoothNeutralMix : 0.65 * maskValue;
     const nr = Math.round(br * (1 - neutralMix) + lum * neutralMix);
     const ng = Math.round(bg * (1 - neutralMix) + lum * neutralMix);
     const nb = Math.round(bb * (1 - neutralMix) + lum * neutralMix);
