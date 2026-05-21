@@ -1,10 +1,13 @@
 (function () {
 
-  // ── Transparent 1×1 GIF placeholder ─────────────────────────────────────
-  // Using a valid data-URI instead of src="" prevents mobile browsers from
-  // making a GET request to the current page URL (which returns HTML, not an
-  // image, causing a persistent broken-image state on Chrome/Safari mobile).
-  var BLANK_GIF = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+  // ── Placeholder data-URIs ─────────────────────────────────────────────────
+  // BLANK_GIF: transparent 1×1 used as the initial src so the browser never
+  //   makes a GET to the page URL before data-src is swapped in.
+  // GREY_SVG: solid #ebebeb 1×1 used when imageUrl is missing or the real
+  //   image fails to load. Prevents the white broken-image rectangle that
+  //   mobile Safari shows for failed <img> loads.
+  var BLANK_GIF  = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+  var GREY_SVG   = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'%3E%3Crect width='1' height='1' fill='%23ebebeb'/%3E%3C/svg%3E";
 
   // ── Lazy / eager image loader ─────────────────────────────────────────────
   // activeObservers tracks every IntersectionObserver we create so we can
@@ -17,24 +20,31 @@
     activeObservers = [];
   }
 
-  // Load a single lazy image — sets src from data-src and clears the attribute.
-  // Keeps pcg-lazy class (and thus opacity:0) until the image actually loads so we
-  // never flash a broken-image icon on mobile. Removes the class on success/error
-  // so the CSS transition fades the image in when ready.
+  // Load a single lazy image — swaps data-src → src and removes pcg-lazy when done.
   //
-  // If data-src is empty (preview image not generated yet): reveal the element
-  // immediately so the card shows a visible grey placeholder rather than an
-  // invisible gap — customers see the colour name with a neutral tile.
+  // Three outcomes:
+  //  1. data-src is empty (image not generated yet)
+  //     → set GREY_SVG so the card shows a visible grey tile (not a white void)
+  //  2. data-src is a valid URL that loads OK
+  //     → onload removes pcg-lazy so the real image fades in
+  //  3. data-src URL exists but fails (404/network error)
+  //     → onerror swaps in GREY_SVG so mobile Safari doesn't show a white
+  //        broken-image rectangle
   function loadImg(img) {
     var src = img.dataset.src;
     img.removeAttribute("data-src");
+
     if (!src) {
-      // No image URL — unhide so the grey css background-color shows as placeholder
+      img.src = GREY_SVG;
       img.classList.remove("pcg-lazy");
       return;
     }
+
     img.onload  = function () { img.classList.remove("pcg-lazy"); };
-    img.onerror = function () { img.classList.remove("pcg-lazy"); };
+    img.onerror = function () {
+      img.src = GREY_SVG;            // solid grey instead of white broken-image
+      img.classList.remove("pcg-lazy");
+    };
     img.src = src;
   }
 
