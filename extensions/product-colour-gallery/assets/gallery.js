@@ -21,10 +21,18 @@
   // Keeps pcg-lazy class (and thus opacity:0) until the image actually loads so we
   // never flash a broken-image icon on mobile. Removes the class on success/error
   // so the CSS transition fades the image in when ready.
+  //
+  // If data-src is empty (preview image not generated yet): reveal the element
+  // immediately so the card shows a visible grey placeholder rather than an
+  // invisible gap — customers see the colour name with a neutral tile.
   function loadImg(img) {
     var src = img.dataset.src;
-    if (!src) return;
     img.removeAttribute("data-src");
+    if (!src) {
+      // No image URL — unhide so the grey css background-color shows as placeholder
+      img.classList.remove("pcg-lazy");
+      return;
+    }
     img.onload  = function () { img.classList.remove("pcg-lazy"); };
     img.onerror = function () { img.classList.remove("pcg-lazy"); };
     img.src = src;
@@ -32,30 +40,38 @@
 
   function lazyLoadImages(container, eagerCount) {
     eagerCount = eagerCount || 4;
-    const imgs = Array.from(container.querySelectorAll("img.pcg-lazy"));
+    var imgs = Array.from(container.querySelectorAll("img.pcg-lazy"));
     if (!imgs.length) return;
 
-    imgs.forEach((img, i) => {
-      if (i < eagerCount) {
+    // On mobile, IntersectionObserver can silently fail to fire for images that
+    // become visible inside a freshly-expanded container — the observer callback
+    // is async and may not re-check after the layout settles on some mobile browsers.
+    // Safest fix: load all images eagerly on mobile (no lazy-loading at all).
+    // On desktop the grid has max-height:280px with overflow-y:auto, so only 2-3
+    // rows are in view — IntersectionObserver is still worthwhile there.
+    var isMobile = window.matchMedia("(max-width: 749px)").matches;
+
+    imgs.forEach(function (img, i) {
+      if (isMobile || i < eagerCount) {
         if (i === 0) img.setAttribute("fetchpriority", "high");
         loadImg(img);
         return;
       }
       if ("IntersectionObserver" in window) {
-        const observer = new IntersectionObserver(
-          (entries) => {
-            entries.forEach((entry) => {
+        var observer = new IntersectionObserver(
+          function (entries) {
+            entries.forEach(function (entry) {
               if (!entry.isIntersecting) return;
               loadImg(entry.target);
               observer.unobserve(entry.target);
             });
           },
-          { rootMargin: "120px" }  // slightly larger margin gives mobile more time to load
+          { rootMargin: "120px" }
         );
         observer.observe(img);
         activeObservers.push(observer);
       } else {
-        setTimeout(() => { loadImg(img); }, (i - eagerCount) * 60);
+        setTimeout(function () { loadImg(img); }, (i - eagerCount) * 60);
       }
     });
   }
