@@ -379,29 +379,6 @@ export async function buildRealisticComposite(params: {
   const renderMode = getFabricRenderMode(fabricFamily, colourName);
   const warmFactor = await getSwatchWarmFactor(swatchBuffer);
 
-  // ── Average swatch colour → sub-mode for smooth-colour fabrics ───────────
-  // Computed once here so both the compositing step and the pixel loop can
-  // branch on the same value without per-pixel saturation calculations.
-  let swatchSatRange = 0;
-  let swatchFabLum   = 128;
-  {
-    const avgBuf = await sharp(swatchBuffer).resize(1, 1).removeAlpha().raw().toBuffer();
-    const sr = avgBuf[0] ?? 128, sg = avgBuf[1] ?? 128, sb = avgBuf[2] ?? 128;
-    swatchSatRange = Math.max(sr, sg, sb) - Math.min(sr, sg, sb);
-    swatchFabLum   = 0.299 * sr + 0.587 * sg + 0.114 * sb;
-  }
-  //  "saturated" – strong colour (orange / red / blue / purple, satRange > 80)
-  //               → cap-to-fabric + alphaBase 0.82 + darken-only high-pass ✓ (confirmed for orange)
-  //  "dark"      – near-black (black / dark navy, fabricLum < 55)
-  //               → luminance offset + both-direction high-pass (highlights show structure)
-  //  "neutral"   – grey / mink / cream / stone (low sat, mid-to-light lum)
-  //               → cap-to-fabric + alphaBase 0.80 + NO high-pass (avoids lamp-edge halo blobs)
-  const fabricSubMode: "saturated" | "dark" | "neutral" =
-    renderMode !== "smooth-colour" ? "neutral"
-    : swatchSatRange > 80            ? "saturated"
-    : swatchFabLum   < 55            ? "dark"
-    :                                  "neutral";
-
   const maskedLighting = await extractMaskedLighting(baseBuffer, maskBuffer, width, height);
 
   let mainFabricLayer: Buffer;
@@ -413,95 +390,35 @@ export async function buildRealisticComposite(params: {
     mainFabricLayer = await createSmoothColourLayer(swatchBuffer, width, height);
   }
 
-  // ── Texture layer ─────────────────────────────────────────────────────────
-  //
-  // smooth-colour (plush / velvet / mink): NO tile overlay.
-  //   Every tiling approach we tried eventually showed a visible grid on
-  //   lighter/brighter colours because the swatch photo is never perfectly
-  //   uniform — normalise() or strong linear() amplifies whatever internal
-  //   lighting gradient the swatch has, creating a repeating rectangular
-  //   pattern.  Plush/velvet fabrics have a smooth, uniform appearance anyway;
-  //   their visual character comes from the base colour + the lighting
-  //   interaction with the headboard shape, not from a surface weave pattern.
-  //   maskedLighting (see below) handles all depth and structural variation.
-  //
-  // soft-texture (suede / venice): 5% tile + greyscale + gentle linear.
-  //   These fabrics genuinely have a visible woven/napped surface, and the
-  //   lower linear coefficient (0.08) keeps the repeat subtle enough to avoid
-  //   the grid problem.
-  let textureLight: Buffer | null = null;
-  if (renderMode === "smooth-colour") {
-    // No texture overlay — maskedLighting carries all structural depth.
-    textureLight = null;
-  } else {
-    const softTextureLayer = await createSoftTextureLayer(swatchBuffer, width, height);
-    const softenedTextureForBlend = await sharp(softTextureLayer).blur(1.0).png().toBuffer();
-    textureLight = await sharp(softenedTextureForBlend).linear(0.08, 116).png().toBuffer();
-  }
+  // ── Texture overlay (both modes) ─────────────────────────────────────────
+  // Soft-light overlay of a greyscale swatch texture adds subtle surface depth.
+  // linear() coefficients keep contrast very low so no tile-repeat grid shows.
+  const softTextureLayer = await createSoftTextureLayer(swatchBuffer, width, height);
+  const softenedTextureForBlend = await sharp(softTextureLayer).blur(2.4).png().toBuffer();
+  const textureLight = await sharp(softenedTextureForBlend)
+    .linear(
+      renderMode === "smooth-colour" ? 0.10 : 0.15,
+      renderMode === "smooth-colour" ? 118  : 109,
+    )
+    .png()
+    .toBuffer();
 
-  const compositeInputs: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [];
-
-  if (renderMode === "smooth-colour") {
-    // ── High-pass seam lines — conditional on fabricSubMode ──────────────────
-    //
-    // "neutral" fabrics (grey / mink / cream) → NO high-pass overlay.
-    //   The high-pass creates a "dark halo ring" at the studio lamp's edge:
-    //   the sharp brightness drop there makes fine(σ=2) dip below coarse(σ=25),
-    //   producing a negative diff and a darkening ring around the lamp blob.
-    //   On low-saturation fabrics this halo is visible as a rounded blob patch.
-    //   We skip it here and let the pixel loop (alphaBase=0.80, cap-to-fabric)
-    //   carry all depth — shadow areas produce up to ~30 units of darkening,
-    //   enough to show the headboard seam design with zero blob risk.
-    //
-    // "saturated" fabrics (orange / red / blue) → darken-only high-pass (0.40).
-    //   The lamp colour contamination is blocked by cap-to-fabric in the pixel
-    //   loop, so the halo is invisible against the strong colour saturation.
-    //   Positive diff (lamp highlights) is clamped to neutral (128) → no blob.
-    //
-    // "dark" fabrics (black / dark navy) → both-direction high-pass (0.25).
-    //   cap-to-fabric zeroes out ALL depth on near-black (min(200,5)=5 always).
-    //   Allowing positive diff lets highlighted headboard panel edges register
-    //   as slightly lighter dark-grey — correct for real dark velvet.
-    if (fabricSubMode !== "neutral") {
-      const fineRaw   = await sharp(maskedLighting).blur(2).greyscale().raw().toBuffer();
-      const coarseRaw = await sharp(maskedLighting).blur(25).greyscale().raw().toBuffer();
-      const pixelCount = width * height;
-      const hpRgb = Buffer.alloc(pixelCount * 3);
-      for (let i = 0; i < pixelCount; i++) {
-        const diff = (fineRaw[i] as number) - (coarseRaw[i] as number);
-        let v: number;
-        if (fabricSubMode === "saturated") {
-          // Darken-only: seam dips darken, lamp highlights stay neutral (128)
-          v = diff < 0
-            ? Math.max(0, Math.min(255, Math.round(128 + diff * 0.40)))
-            : 128;
-        } else {
-          // dark: both directions at gentler strength — highlights show structure
-          v = Math.max(0, Math.min(255, Math.round(128 + diff * 0.25)));
-        }
-        hpRgb[i * 3] = v; hpRgb[i * 3 + 1] = v; hpRgb[i * 3 + 2] = v;
-      }
-      const structureLight = await sharp(hpRgb, { raw: { width, height, channels: 3 } })
-        .png()
-        .toBuffer();
-      compositeInputs.push({ input: structureLight, blend: "soft-light" });
-    }
-    // "neutral" → no high-pass overlay; pixel loop below handles all depth
-  } else {
-    // ── Single broad pass for soft-texture fabrics ────────────────────────────
-    const broadLighting = await sharp(maskedLighting).blur(3).png().toBuffer();
-    compositeInputs.push({ input: broadLighting, blend: "soft-light" });
-  }
-
-  if (textureLight) {
-    compositeInputs.push({ input: textureLight, blend: "soft-light" });
-  }
+  // ── Lighting overlay ──────────────────────────────────────────────────────
+  // maskedLighting = greyscale shadow/highlight map of the base photo × mask.
+  // For smooth-colour fabrics, compress the broad dynamic range with linear()
+  // so the studio lamp gradient doesn't blow out as a large lighter blob.
+  const maskedLightingForBlend = renderMode === "smooth-colour"
+    ? await sharp(maskedLighting).linear(0.55, 58).png().toBuffer()
+    : maskedLighting;
 
   const colouredFabric = await sharp(mainFabricLayer)
-    .composite(compositeInputs)
+    .composite([
+      { input: maskedLightingForBlend, blend: "soft-light" },
+      { input: textureLight,           blend: "soft-light" },
+    ])
     .modulate({
-      brightness: (renderMode === "smooth-colour" ? 0.90 : 0.91) * warmFactor, // was 0.87 — less dark
-      saturation: renderMode === "smooth-colour" ? 1.02 : 1.08,                // was 1.05 — slightly less punchy
+      brightness: (renderMode === "smooth-colour" ? 0.87 : 0.91) * warmFactor,
+      saturation:  renderMode === "smooth-colour" ? 1.05 : 1.08,
     })
     .gamma(1.01)
     .png()
@@ -531,100 +448,70 @@ export async function buildRealisticComposite(params: {
     const bg = baseRaw.data[idx + 1];
     const bb = baseRaw.data[idx + 2];
 
-    const fr = fabricRaw.data[idx];
-    const fg = fabricRaw.data[idx + 1];
-    const fb = fabricRaw.data[idx + 2];
+    let fr = fabricRaw.data[idx];
+    let fg = fabricRaw.data[idx + 1];
+    let fb = fabricRaw.data[idx + 2];
 
     if (maskValue < 0.01) {
       out[idx] = br; out[idx + 1] = bg; out[idx + 2] = bb; out[idx + 3] = 255;
       continue;
     }
 
-    const lum = 0.299 * br + 0.587 * bg + 0.114 * bb;
+    const sourceLum    = 0.299 * br + 0.587 * bg + 0.114 * bb;
+    const fabricLumRaw = 0.299 * fr + 0.587 * fg + 0.114 * fb;
 
-    if (renderMode === "smooth-colour") {
-      // Three depth strategies based on fabricSubMode (determined from swatch average):
+    // Luminance-based alpha — how much of the fabric layer covers the base.
+    // Smooth-colour (plush/velvet/mink): varies by fabric brightness so very
+    // light and very dark fabrics both sit naturally in the bed photo.
+    // Soft-texture (suede/venice): use the caller-supplied blendStrength.
+    const isBlackFabric     = fabricLumRaw < 25;
+    const isDarkFabric      = fabricLumRaw >= 25  && fabricLumRaw < 85;
+    const isMidLightFabric  = fabricLumRaw >= 130 && fabricLumRaw <= 160;
+    const isBrightFabric    = fabricLumRaw > 160  && fabricLumRaw <= 210;
+    const isNearWhiteFabric = fabricLumRaw > 210;
 
-      if (fabricSubMode === "saturated") {
-        // ── SATURATED (orange / red / royal blue / purple, satRange > 80) ────
-        // cap-to-fabric + alphaBase 0.82: 18% base contribution shows deep
-        // shadow seam lines. Lamp can't push any channel above fabric value →
-        // no colour blobs. High-pass overlay (darken-only) adds seam crispness.
-        // Confirmed perfect for orange — unchanged from previous working state.
-        const alphaBase = 0.82;
-        const cappedBR  = Math.min(lum, fr);
-        const cappedBG  = Math.min(lum, fg);
-        const cappedBB  = Math.min(lum, fb);
-        const depthR = fr * alphaBase + cappedBR * (1 - alphaBase);
-        const depthG = fg * alphaBase + cappedBG * (1 - alphaBase);
-        const depthB = fb * alphaBase + cappedBB * (1 - alphaBase);
-        out[idx]     = Math.max(0, Math.min(255, Math.round(br * (1 - maskValue) + depthR * maskValue)));
-        out[idx + 1] = Math.max(0, Math.min(255, Math.round(bg * (1 - maskValue) + depthG * maskValue)));
-        out[idx + 2] = Math.max(0, Math.min(255, Math.round(bb * (1 - maskValue) + depthB * maskValue)));
-        out[idx + 3] = 255;
+    const alphaBase = renderMode === "smooth-colour"
+      ? (isBlackFabric     ? 0.78
+       : isDarkFabric      ? 0.86
+       : isMidLightFabric  ? 0.70
+       : isNearWhiteFabric ? 0.68
+       : isBrightFabric    ? 0.75
+       : 0.83)
+      : blendStrength;
+    const alpha = Math.max(0, Math.min(1, maskValue * alphaBase));
 
-      } else if (fabricSubMode === "dark") {
-        // ── DARK (black / dark navy / charcoal, swatchFabLum < 55) ───────────
-        // cap-to-fabric gives zero depth: min(lum=200, fr=5) = 5 always.
-        // Luminance offset: shift the dark colour proportionally to the original
-        // photo's lighting — seam shadows and panel highlights both register on
-        // near-black fabric as subtle tonal variation (correct for real dark velvet).
-        const lumOffset = (lum - 128) * 0.15;
-        const depthR = Math.max(0, Math.min(255, Math.round(fr + lumOffset)));
-        const depthG = Math.max(0, Math.min(255, Math.round(fg + lumOffset)));
-        const depthB = Math.max(0, Math.min(255, Math.round(fb + lumOffset)));
-        out[idx]     = Math.max(0, Math.min(255, Math.round(br * (1 - maskValue) + depthR * maskValue)));
-        out[idx + 1] = Math.max(0, Math.min(255, Math.round(bg * (1 - maskValue) + depthG * maskValue)));
-        out[idx + 2] = Math.max(0, Math.min(255, Math.round(bb * (1 - maskValue) + depthB * maskValue)));
-        out[idx + 3] = 255;
-
-      } else {
-        // ── NEUTRAL (grey / mink / cream / stone / white) ─────────────────────
-        // cap-to-fabric + alphaBase 0.80: 20% base contribution → up to ~30
-        // units of shadow depth at seam locations (anywhere lum < fr). Lamp
-        // highlights capped to fabric value → zero lighter-patch blob risk.
-        // No high-pass overlay above → no lamp-edge halo blob artefacts.
-        const alphaBase = 0.80;
-        const cappedBR  = Math.min(lum, fr);
-        const cappedBG  = Math.min(lum, fg);
-        const cappedBB  = Math.min(lum, fb);
-        const depthR = fr * alphaBase + cappedBR * (1 - alphaBase);
-        const depthG = fg * alphaBase + cappedBG * (1 - alphaBase);
-        const depthB = fb * alphaBase + cappedBB * (1 - alphaBase);
-        out[idx]     = Math.max(0, Math.min(255, Math.round(br * (1 - maskValue) + depthR * maskValue)));
-        out[idx + 1] = Math.max(0, Math.min(255, Math.round(bg * (1 - maskValue) + depthG * maskValue)));
-        out[idx + 2] = Math.max(0, Math.min(255, Math.round(bb * (1 - maskValue) + depthB * maskValue)));
-        out[idx + 3] = 255;
-      }
-
-    } else {
-      // ── Additive alpha blending for soft-texture fabrics (unchanged) ──────────
-      let mfr = fr, mfg = fg, mfb = fb;
-      const fabricLumRaw = 0.299 * fr + 0.587 * fg + 0.114 * fb;
-      const sourceLum = lum;
-
-      const lumCap = 1.14;
-      if (fabricLumRaw > 10 && fabricLumRaw > sourceLum * lumCap) {
-        const lumScale = (sourceLum * lumCap) / fabricLumRaw;
-        mfr = Math.min(255, Math.round(fr * lumScale));
-        mfg = Math.min(255, Math.round(fg * lumScale));
-        mfb = Math.min(255, Math.round(fb * lumScale));
-      }
-
-      const alpha = Math.max(0, Math.min(1, maskValue * blendStrength));
-      const neutralMix = 0.65 * maskValue;
-      const nr = Math.round(br * (1 - neutralMix) + lum * neutralMix);
-      const ng = Math.round(bg * (1 - neutralMix) + lum * neutralMix);
-      const nb = Math.round(bb * (1 - neutralMix) + lum * neutralMix);
-
-      const finalLum = 0.299 * mfr + 0.587 * mfg + 0.114 * mfb;
-      const boost = finalLum < 115 ? 0.96 : 0.99;
-
-      out[idx]     = Math.max(0, Math.min(255, Math.round(nr * (1 - alpha) + mfr * boost * alpha)));
-      out[idx + 1] = Math.max(0, Math.min(255, Math.round(ng * (1 - alpha) + mfg * boost * alpha)));
-      out[idx + 2] = Math.max(0, Math.min(255, Math.round(nb * (1 - alpha) + mfb * boost * alpha)));
-      out[idx + 3] = 255;
+    // Luminance cap: prevents fabric from appearing brighter than the bed's
+    // lighting allows. lumCap is looser for smooth-colour (2.50) because the
+    // maskedLighting overlay already handles broad depth; for soft-texture
+    // the tighter cap (1.14) keeps the texture from looking artificially bright.
+    const lumCap = renderMode === "smooth-colour" ? 2.50 : 1.14;
+    if (fabricLumRaw > 10 && fabricLumRaw > sourceLum * lumCap) {
+      const lumScale = (sourceLum * lumCap) / fabricLumRaw;
+      fr = Math.min(255, Math.round(fr * lumScale));
+      fg = Math.min(255, Math.round(fg * lumScale));
+      fb = Math.min(255, Math.round(fb * lumScale));
     }
+
+    const lum = Math.round(sourceLum);
+
+    // smooth-colour: blend directly onto the base (no greyscale neutral mix —
+    //   the maskedLighting overlay handles depth).
+    // soft-texture: shift base toward greyscale first so the fabric colour
+    //   sits naturally within the bed's existing shadow/highlight structure.
+    const neutralMix = renderMode === "smooth-colour" ? 0.0 : 0.65 * maskValue;
+    const nr = Math.round(br * (1 - neutralMix) + lum * neutralMix);
+    const ng = Math.round(bg * (1 - neutralMix) + lum * neutralMix);
+    const nb = Math.round(bb * (1 - neutralMix) + lum * neutralMix);
+
+    const finalLum = 0.299 * fr + 0.587 * fg + 0.114 * fb;
+    const boost = renderMode === "smooth-colour"
+      ? (finalLum < 115 ? 1.02 : 1.0)
+      : (finalLum < 115 ? 0.96 : 0.99);
+
+    out[idx]     = Math.max(0, Math.min(255, Math.round(nr * (1 - alpha) + fr * boost * alpha)));
+    out[idx + 1] = Math.max(0, Math.min(255, Math.round(ng * (1 - alpha) + fg * boost * alpha)));
+    out[idx + 2] = Math.max(0, Math.min(255, Math.round(nb * (1 - alpha) + fb * boost * alpha)));
+    out[idx + 3] = 255;
 
     // Yield every CHUNK pixels so HTTP requests can be serviced between chunks
     if (i > 0 && i % CHUNK === 0) {
