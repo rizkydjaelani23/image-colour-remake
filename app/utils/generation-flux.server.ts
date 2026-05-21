@@ -1,22 +1,28 @@
 /**
- * FLUX.1-Fill HD generation — photorealistic fabric colour previews via fal.ai
+ * FLUX.1 Kontext HD generation — photorealistic fabric colour previews via fal.ai
  *
- * ── SAFETY DESIGN ───────────────────────────────────────────────────────────
- * This file is completely isolated from the existing Sharp pipeline.
- * It is NEVER called by any existing code path.
+ * ── APPROACH ────────────────────────────────────────────────────────────────
+ * Uses fal-ai/flux-pro/kontext (single-image, instruction-based editing).
+ * No mask required — the model edits from the text instruction alone.
  *
- * To enable:  set FLUX_HD_ENABLED=true  AND  FAL_KEY=<your-fal-api-key>
- *             in Railway env vars (or .env for local testing).
+ * Pipeline:
+ *   1. Extract exact hex colour from the swatch image
+ *   2. Upload product image to fal.ai storage
+ *   3. Run Kontext with colour+fabric prompt and a fixed seed
+ *   4. Download result, upload to R2
+ *   5. Upsert Preview record
  *
- * When disabled (default): isFluxEnabled() returns false and all callers
- * must check this before calling runFluxGeneration(). The fal.ai package
- * is imported lazily — the server never touches it unless a call is made.
+ * Fixed seed per product ensures all colour variants have identical framing.
+ * Output dimensions are determined by the model (~50% of input, aspect preserved).
+ * Same input image = same dimensions every time, regardless of colour.
  *
- * Returns the same GenerationResult type as generation-core.server.ts so
- * it can be a drop-in when wired into the worker in Phase 2.
+ * ── SAFETY ──────────────────────────────────────────────────────────────────
+ * Completely isolated from the existing Sharp pipeline.
+ * Only called when FLUX_HD_ENABLED=true AND FAL_KEY is set.
  * ────────────────────────────────────────────────────────────────────────────
  */
 
+import sharp from "sharp";
 import prisma from "./db.server";
 import { uploadBufferToStorage } from "./storage.server";
 import { slugify } from "./generation-core.server";
@@ -24,8 +30,7 @@ import { safeFolderName } from "./visualiser.server";
 import type { GenerationResult } from "./generation-core.server";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Feature flag
-// Both conditions must be true — missing either one keeps the feature off.
+// Feature flag — both must be true
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function isFluxEnabled(): boolean {
@@ -37,83 +42,112 @@ export function isFluxEnabled(): boolean {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// fal.ai model endpoint
-// FLUX.1 [pro] Fill — $0.05 per megapixel (1024×1024 = $0.05/image)
+// Model
 // ─────────────────────────────────────────────────────────────────────────────
 
-const FAL_MODEL = "fal-ai/flux-pro/v1/fill" as const;
+const FAL_MODEL = "fal-ai/flux-pro/kontext" as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Lazy client — only initialised on first actual call, never on server boot
+// Lazy fal.ai client
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function getFalClient() {
   const key = process.env.FAL_KEY?.trim();
-  if (!key) {
-    throw new Error(
-      "[flux] FAL_KEY env var is not set. " +
-      "Add it to Railway env vars before enabling FLUX_HD_ENABLED.",
-    );
-  }
-
-  // Dynamic import so the server never loads this package unless
-  // a HD generation is actually requested.
+  if (!key) throw new Error("[flux] FAL_KEY is not set.");
   const { fal } = await import("@fal-ai/client");
   fal.config({ credentials: key });
   return fal;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Prompt builder — fabric family + colour name → FLUX inpainting prompt
+// Colour helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Extract the dominant hex colour from a swatch image buffer.
+ * Uses sharp's stats() on a downscaled version for speed.
+ */
+async function swatchToHex(swatchBuffer: Buffer): Promise<string> {
+  const stats = await sharp(swatchBuffer)
+    .resize(50, 50, { fit: "cover" })
+    .stats();
+  const { r, g, b } = stats.dominant;
+  const toHex = (n: number) => Math.round(n).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fabric descriptors
 // ─────────────────────────────────────────────────────────────────────────────
 
 const FABRIC_DESCRIPTORS: Record<string, string> = {
-  plush:    "plush velvet upholstery with soft directional pile and subtle sheen",
-  velvet:   "crushed velvet upholstery with natural shimmer and pile variation",
-  mink:     "plush mink velvet upholstery, ultra-soft with luxurious sheen",
-  suede:    "microfibre suede upholstery with fine matte texture",
-  venice:   "venice woven fabric upholstery with refined texture",
-  boucle:   "bouclé fabric upholstery with looped wool texture",
-  chenille: "chenille upholstery with ribbed pile texture",
+  plush:    "plush velvet",
+  velvet:   "crushed velvet",
+  velvetto: "velvetto velvet",
+  mink:     "mink velvet",
+  suede:    "microfibre suede",
+  venice:   "Venice fabric",
+  boucle:   "bouclé",
+  chenille: "chenille",
+  naples:   "Naples velvet",
 };
 
-function buildFabricPrompt(fabricFamily: string, colourName: string): string {
-  const familyLower = fabricFamily.toLowerCase().trim();
+function getFabricDescriptor(fabricFamily: string): string {
+  const lower = fabricFamily.toLowerCase();
+  const match = Object.entries(FABRIC_DESCRIPTORS).find(([k]) => lower.includes(k));
+  return match ? match[1] : fabricFamily;
+}
 
-  const textureDesc =
-    Object.entries(FABRIC_DESCRIPTORS).find(([key]) =>
-      familyLower.includes(key),
-    )?.[1] ?? `${fabricFamily.trim()} fabric upholstery`;
+// ─────────────────────────────────────────────────────────────────────────────
+// Prompt builder
+// ─────────────────────────────────────────────────────────────────────────────
 
+function buildKontextPrompt(
+  fabricFamily: string,
+  colourName: string,
+  hex: string,
+): string {
+  const fabric = getFabricDescriptor(fabricFamily);
   return (
-    `photorealistic ${colourName.trim()} ${textureDesc}, ` +
-    `accurate fabric colour, natural studio lighting with correct shadows and highlights, ` +
-    `photorealistic furniture product photography, high detail, 4k`
+    `Change the upholstery fabric colour to ${colourName} (${hex}) ${fabric}. ` +
+    `Keep the bed frame shape, stitching, headboard silhouette, divan base, footboard, ` +
+    `room background, pillows, lighting and shadows completely identical. ` +
+    `Only the fabric colour and texture changes. ` +
+    `Photorealistic furniture product photography.`
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Types
+// Deterministic seed — same product+zone always gets the same framing
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getSeedForProduct(productId: string, zoneId: string): number {
+  // Simple deterministic hash — keeps framing identical across all colour variants
+  let hash = 0;
+  const str = `${productId}:${zoneId}`;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash) % 2_147_483_647 || 42;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Params
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface FluxGenerationParams {
-  shopId:          string;
-  shopDomain:      string;
-  productId:       string;
-  zoneId:          string;
+  shopId:           string;
+  shopDomain:       string;
+  productId:        string;
+  zoneId:           string;
   shopifyProductId: string;
-  fabricFamily:    string;
-  colourName:      string;
-  swatchId?:       string | null;
-  /** Public HTTP(S) URL of the base product image (Shopify CDN or R2) */
-  productImageUrl: string;
-  /**
-   * Public HTTP(S) URL of the zone mask image.
-   * WHITE pixels = area to replace with new fabric.
-   * BLACK pixels = keep original image unchanged.
-   * Must be a public URL — local paths are not supported by fal.ai.
-   */
-  maskUrl: string;
+  fabricFamily:     string;
+  colourName:       string;
+  swatchId?:        string | null;
+  /** Public HTTP(S) URL of the product image */
+  productImageUrl:  string;
+  /** Public HTTP(S) URL of the swatch image — used to extract hex colour */
+  swatchImageUrl?:  string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -132,85 +166,103 @@ export async function runFluxGeneration(
     shopifyProductId,
     fabricFamily,
     colourName,
+    swatchImageUrl,
   } = params;
   let { swatchId } = params;
 
-  // Guard — callers should check isFluxEnabled() first, but be safe here too
   if (!isFluxEnabled()) {
     throw new Error("[flux] FLUX HD generation is not enabled on this server.");
   }
 
-  // Guard — fal.ai requires a public URL for the mask
-  if (!params.maskUrl.startsWith("http")) {
-    throw new Error(
-      `[flux] Zone mask must be a public URL for HD rendering. ` +
-      `Got: "${params.maskUrl}". ` +
-      `Re-save the zone to upload the mask to R2 first.`,
-    );
+  await onProgress?.(5);
+
+  const fal = await getFalClient();
+
+  // ── Step 1: Download product image ────────────────────────────────────
+  const productRes = await fetch(params.productImageUrl);
+  if (!productRes.ok) {
+    throw new Error(`[flux] Failed to download product image: ${productRes.status}`);
+  }
+  const productBuffer = Buffer.from(await productRes.arrayBuffer());
+
+  await onProgress?.(15);
+
+  // ── Step 2: Extract hex colour from swatch ─────────────────────────────
+  let hex = "#808080"; // fallback grey
+  if (swatchImageUrl) {
+    try {
+      const swatchRes = await fetch(swatchImageUrl);
+      if (swatchRes.ok) {
+        const swatchBuffer = Buffer.from(await swatchRes.arrayBuffer());
+        hex = await swatchToHex(swatchBuffer);
+      }
+    } catch (err) {
+      console.warn("[flux] Could not extract hex from swatch, using fallback:", err);
+    }
   }
 
-  await onProgress?.(10);
-
-  const fal    = await getFalClient();
-  const prompt = buildFabricPrompt(fabricFamily, colourName);
+  const prompt = buildKontextPrompt(fabricFamily, colourName, hex);
+  const seed   = getSeedForProduct(productId, zoneId);
 
   console.log(
-    `[flux] starting HD render — ${fabricFamily}/${colourName}` +
-    ` | prompt: "${prompt.slice(0, 80)}..."`,
+    `[flux] starting Kontext render — ${fabricFamily}/${colourName} ${hex} ` +
+    `| seed=${seed} | prompt: "${prompt.slice(0, 80)}..."`,
   );
 
-  await onProgress?.(20);
+  await onProgress?.(25);
 
-  // ── Call fal.ai FLUX.1-Fill ─────────────────────────────────────────────
-  // fal.subscribe() submits the job and polls until complete (default 500ms interval).
-  // Typical wall-clock time: 6–15 seconds at default image dimensions.
+  // ── Step 3: Upload product image to fal.ai storage ────────────────────
+  const uploadedImageUrl = await fal.storage.upload(
+    new File([productBuffer], "product.jpg", { type: "image/jpeg" }),
+  );
+
+  await onProgress?.(35);
+
+  // ── Step 4: Run Kontext ────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await (fal as any).subscribe(FAL_MODEL, {
     input: {
-      image_url:           params.productImageUrl,
-      mask_url:            params.maskUrl,
+      image_url:           uploadedImageUrl,
       prompt,
-      num_inference_steps: 28,    // quality / speed sweet spot for FLUX Pro Fill
-      guidance_scale:      3.5,   // recommended value for FLUX.1
-      output_format:       "jpeg", // JPEG: smaller files, negligible quality loss for previews
-      // Resolution: omitted — fal.ai uses the input image's natural dimensions.
-      // Billing = megapixels of OUTPUT image, rounded up.
+      num_inference_steps: 28,
+      guidance_scale:      2.5,
+      safety_tolerance:    "6",
+      seed,
     },
     logs: false,
     onQueueUpdate: async (update: { status: string }) => {
-      if (update.status === "IN_QUEUE")     await onProgress?.(30);
-      if (update.status === "IN_PROGRESS")  await onProgress?.(55);
+      if (update.status === "IN_QUEUE")    await onProgress?.(40);
+      if (update.status === "IN_PROGRESS") await onProgress?.(60);
     },
   });
 
   await onProgress?.(75);
 
-  // ── Validate response ───────────────────────────────────────────────────
+  // ── Step 5: Validate response ─────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const generatedUrl: string | undefined = (result as any)?.data?.images?.[0]?.url;
   if (!generatedUrl) {
     throw new Error(
       `[flux] fal.ai returned no image URL. ` +
-      `Raw response: ${JSON.stringify(result).slice(0, 300)}`,
+      `Raw: ${JSON.stringify(result).slice(0, 300)}`,
     );
   }
 
-  // ── Download generated image ────────────────────────────────────────────
-  const imageResponse = await fetch(generatedUrl);
-  if (!imageResponse.ok) {
-    throw new Error(
-      `[flux] Failed to download generated image from fal.ai: ` +
-      `${imageResponse.status} ${imageResponse.statusText}`,
-    );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const outputMeta = (result as any)?.data?.images?.[0];
+  const outWidth:  number = outputMeta?.width  ?? 1104;
+  const outHeight: number = outputMeta?.height ?? 944;
+
+  // ── Step 6: Download generated image ──────────────────────────────────
+  const imageRes = await fetch(generatedUrl);
+  if (!imageRes.ok) {
+    throw new Error(`[flux] Failed to download generated image: ${imageRes.status}`);
   }
-  const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+  const imageBuffer = Buffer.from(await imageRes.arrayBuffer());
 
   await onProgress?.(85);
 
-  // ── Upload to R2 ────────────────────────────────────────────────────────
-  // Uses the same path structure as Sharp previews but adds an "__hd" suffix.
-  // This keeps HD renders separate from Sharp renders in storage — both can
-  // coexist during the transition period.
+  // ── Step 7: Upload to R2 ──────────────────────────────────────────────
   const safeProduct = safeFolderName(shopifyProductId);
   const safeFamily  = slugify(fabricFamily);
   const safeColour  = slugify(colourName);
@@ -233,11 +285,7 @@ export async function runFluxGeneration(
 
   await onProgress?.(93);
 
-  // ── Upsert Preview record ───────────────────────────────────────────────
-  // Updates the existing preview (same product/zone/fabric/colour) with the
-  // new HD URL. If no preview exists yet, creates one in DRAFT status.
-  // The merchant's approval status is preserved on update (we only change
-  // imagePath + imageUrl, not status/featured/approvedForStorefront).
+  // ── Step 8: Upsert Preview record ─────────────────────────────────────
   const preview = await prisma.preview.upsert({
     where: {
       productId_zoneId_fabricFamily_colourName: {
@@ -251,32 +299,33 @@ export async function runFluxGeneration(
       swatchId:  swatchId ?? undefined,
       imagePath: uploaded.path,
       imageUrl:  uploaded.publicUrl,
+      width:     outWidth,
+      height:    outHeight,
     },
     create: {
       shopId,
       productId,
       zoneId,
-      swatchId:             swatchId ?? undefined,
+      swatchId:              swatchId ?? undefined,
       shopifyProductId,
       fabricFamily,
       colourName,
-      imagePath:            uploaded.path,
-      imageUrl:             uploaded.publicUrl,
-      status:               "DRAFT",
+      imagePath:             uploaded.path,
+      imageUrl:              uploaded.publicUrl,
+      width:                 outWidth,
+      height:                outHeight,
+      status:                "DRAFT",
       approvedForStorefront: false,
-      featured:             false,
+      featured:              false,
     },
   });
 
   await onProgress?.(100);
 
   console.log(
-    `[flux] HD render done — ${fabricFamily}/${colourName} ` +
-    `→ ${uploaded.publicUrl}`,
+    `[flux] Kontext render done — ${fabricFamily}/${colourName} ` +
+    `${outWidth}×${outHeight} → ${uploaded.publicUrl}`,
   );
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const outputMeta = (result as any)?.data?.images?.[0];
 
   return {
     previewId:    preview.id,
@@ -284,8 +333,8 @@ export async function runFluxGeneration(
     imagePath:    uploaded.path,
     fabricFamily: preview.fabricFamily,
     colourName:   preview.colourName,
-    width:        outputMeta?.width  ?? 1024,
-    height:       outputMeta?.height ?? 1024,
+    width:        outWidth,
+    height:       outHeight,
     swatchId:     swatchId ?? null,
   };
 }
