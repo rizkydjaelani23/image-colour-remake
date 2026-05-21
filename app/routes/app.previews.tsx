@@ -233,6 +233,9 @@ export default function PreviewManagerPage() {
   const [bulkProductApproving, setBulkProductApproving] = useState(false);
   const [bulkProductDeleting, setBulkProductDeleting] = useState(false);
   const [bulkProductResult, setBulkProductResult] = useState<string | null>(null);
+  // HD rendering
+  const [hdRenderingIds, setHdRenderingIds] = useState<Set<string>>(new Set());
+  const [hdToast, setHdToast] = useState<string | null>(null);
 
   async function loadPreviews(forcedProductId?: string) {
     const idToUse = (forcedProductId || productId).trim();
@@ -505,6 +508,38 @@ export default function PreviewManagerPage() {
     }
   }
 
+  async function renderHdPreviews(ids: string[]) {
+    if (ids.length === 0) return;
+    setHdRenderingIds((prev) => new Set([...prev, ...ids]));
+    setHdToast(null);
+    try {
+      const res = await fetch("/api/bulk-hd-render", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ previewIds: ids }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "HD render failed");
+      setHdToast(`✨ HD render queued for ${data.queued} preview${data.queued !== 1 ? "s" : ""}. Images update in ~30–60s.`);
+      // Auto-reload after ~50 s to pick up the new HD images, then clear spinner
+      setTimeout(() => {
+        if (productId) loadPreviews();
+        setHdRenderingIds((prev) => {
+          const next = new Set(prev);
+          ids.forEach((id) => next.delete(id));
+          return next;
+        });
+      }, 50_000);
+    } catch (err) {
+      setHdToast(`❌ ${err instanceof Error ? err.message : "HD render failed"}`);
+      setHdRenderingIds((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
+    }
+  }
+
   async function toggleFeatured(preview: PreviewItem) {
     setSavingId(preview.id);
     try {
@@ -677,6 +712,10 @@ export default function PreviewManagerPage() {
         @keyframes bulkPulse {
           0%, 100% { opacity: 1; }
           50%       { opacity: 0.55; }
+        }
+        @keyframes hdPulse {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.6; }
         }
       `}</style>
       {/* ── Hero ── */}
@@ -1269,12 +1308,35 @@ export default function PreviewManagerPage() {
             </button>
             <button
               type="button"
+              disabled={batchSaving || batchDeleting}
+              onClick={() => renderHdPreviews(selectedIds)}
+              style={{ padding: "8px 16px", borderRadius: "10px", border: "1px solid #10b981", background: "#10b981", color: "#fff", cursor: (batchSaving || batchDeleting) ? "not-allowed" : "pointer", font: "inherit", fontWeight: 700, fontSize: "13px", opacity: (batchSaving || batchDeleting) ? 0.5 : 1 }}
+            >
+              ✨ HD Render {selectedIds.length}
+            </button>
+            <button
+              type="button"
               onClick={() => setSelectedIds([])}
               style={{ padding: "8px 16px", borderRadius: "10px", border: "1px solid #475569", background: "transparent", color: "#94a3b8", cursor: "pointer", font: "inherit", fontWeight: 700, fontSize: "13px" }}
             >
               Clear selection
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ── HD render toast ── */}
+      {hdToast && (
+        <div style={{
+          marginBottom: "16px", padding: "12px 16px", borderRadius: "12px",
+          background: hdToast.startsWith("❌") ? "#fef2f2" : "#f0fdf4",
+          border: hdToast.startsWith("❌") ? "1px solid #fecaca" : "1px solid #bbf7d0",
+          color: hdToast.startsWith("❌") ? "#b91c1c" : "#166534",
+          fontSize: "13px", fontWeight: 700,
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px",
+        }}>
+          <span>{hdToast}</span>
+          <button type="button" onClick={() => setHdToast(null)} style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 900, fontSize: "14px", lineHeight: 1, padding: 0, color: "inherit" }}>✕</button>
         </div>
       )}
 
@@ -1312,6 +1374,8 @@ export default function PreviewManagerPage() {
                 const isSaving = savingId === preview.id;
                 const isRegenerating = regeneratingId === preview.id;
                 const isSelected = selectedIds.includes(preview.id);
+                const isHdRendering = hdRenderingIds.has(preview.id);
+                const isHd = preview.imageUrl.split("?")[0].endsWith("__hd.jpg");
                 const currentDraftName = draftNames[preview.id] ?? preview.colourName;
                 const currentDraftFamily = draftFamilies[preview.id] ?? preview.fabricFamily ?? "";
                 const currentDraftDisplayName = draftDisplayNames[preview.id] ?? "";
@@ -1335,6 +1399,17 @@ export default function PreviewManagerPage() {
                       {isRegenerating && (
                         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px", fontWeight: 700, color: "#4f46e5", background: "rgba(255,255,255,0.6)" }}>
                           Regenerating…
+                        </div>
+                      )}
+                      {isHdRendering && (
+                        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px", fontWeight: 700, color: "#059669", background: "rgba(255,255,255,0.65)", animation: "hdPulse 1.4s ease-in-out infinite" }}>
+                          ✨ HD rendering…
+                        </div>
+                      )}
+                      {/* HD badge */}
+                      {isHd && !isHdRendering && (
+                        <div style={{ position: "absolute", top: "8px", left: "8px", padding: "3px 8px", borderRadius: "999px", background: "#10b981", color: "#fff", fontSize: "11px", fontWeight: 800, letterSpacing: "0.04em", boxShadow: "0 1px 4px rgba(0,0,0,0.2)", pointerEvents: "none" }}>
+                          ✨ HD
                         </div>
                       )}
                       {/* Checkbox */}
@@ -1452,6 +1527,24 @@ export default function PreviewManagerPage() {
                         {isRegenerating ? "…" : "↺ Regenerate"}
                       </button>
                     </div>
+
+                    {/* HD Render */}
+                    <button
+                      type="button"
+                      disabled={isHdRendering || isRegenerating}
+                      onClick={() => renderHdPreviews([preview.id])}
+                      style={{
+                        marginTop: "8px", width: "100%",
+                        padding: "9px 10px", borderRadius: "10px",
+                        border: isHd ? "1px solid #059669" : "1px solid #6ee7b7",
+                        background: isHd ? "#f0fdf4" : "#ffffff",
+                        color: "#059669", cursor: (isHdRendering || isRegenerating) ? "not-allowed" : "pointer",
+                        font: "inherit", fontSize: "13px", fontWeight: 700,
+                        opacity: (isHdRendering || isRegenerating) ? 0.6 : 1,
+                      }}
+                    >
+                      {isHdRendering ? "⏳ HD queued…" : isHd ? "✨ Re-render HD" : "✨ HD Render"}
+                    </button>
 
                     {/* Remove colour */}
                     <button
