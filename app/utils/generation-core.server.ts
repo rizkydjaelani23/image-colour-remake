@@ -433,8 +433,8 @@ export async function buildRealisticComposite(params: {
       { input: textureLight,           blend: "soft-light" },
     ])
     .modulate({
-      brightness: (renderMode === "smooth-colour" ? 0.87 : 0.91) * warmFactor,
-      saturation:  renderMode === "smooth-colour" ? 1.05 : 1.08,
+      brightness: (renderMode === "smooth-colour" ? 0.83 : 0.88) * warmFactor,
+      saturation:  renderMode === "smooth-colour" ? 1.08 : 1.10,
     })
     .gamma(1.01)
     .png()
