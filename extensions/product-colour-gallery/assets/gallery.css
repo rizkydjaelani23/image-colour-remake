@@ -159,16 +159,17 @@
   border-radius: 8px;
   margin-bottom: 6px;
   object-fit: contain;       /* show full product — no cropping */
-  background: #f5f5f5;       /* neutral fill for letterbox areas */
-  transition: opacity 0.2s ease;
+  background: #ebebeb;       /* neutral fill for letterbox areas */
 }
 
-/* Hide img until it finishes loading — pcg-lazy is removed by JS onload/onerror.
-   Using a class selector (not src="") so the rule stays active after lazyLoadImages
-   sets the real src but before the image bytes arrive — prevents broken-image
-   flashes on mobile when images are still downloading. */
+/* While the real image is loading, show a shimmer placeholder so customers
+   immediately see a recognisable grey tile — not an invisible gap.
+   pcg-lazy is removed by JS onload/onerror, which stops the animation
+   and lets the real image (or grey SVG fallback) show. */
 .pcg-card img.pcg-lazy {
-  opacity: 0;
+  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: pcg-shimmer 1.4s infinite;
 }
 
 @keyframes pcg-shimmer {

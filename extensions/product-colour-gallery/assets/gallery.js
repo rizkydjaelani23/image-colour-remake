@@ -35,15 +35,18 @@
     img.removeAttribute("data-src");
 
     if (!src) {
-      img.src = GREY_SVG;
+      // No image URL — stop shimmer immediately, grey tile shows via background
       img.classList.remove("pcg-lazy");
+      img.src = GREY_SVG;
       return;
     }
 
-    img.onload  = function () { img.classList.remove("pcg-lazy"); };
+    img.onload  = function () {
+      img.classList.remove("pcg-lazy"); // stop shimmer, real image is ready
+    };
     img.onerror = function () {
-      img.src = GREY_SVG;            // solid grey instead of white broken-image
-      img.classList.remove("pcg-lazy");
+      img.classList.remove("pcg-lazy"); // stop shimmer
+      img.src = GREY_SVG;              // solid grey instead of broken-image icon
     };
     img.src = src;
   }
