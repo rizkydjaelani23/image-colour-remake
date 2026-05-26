@@ -165,6 +165,20 @@
     const previews = Array.isArray(data.previews) ? data.previews : [];
     if (!previews.length) { root.innerHTML = ""; return; }
 
+    // ── Proxy R2 images through the app to ensure reliable mobile rendering ──
+    // Direct pub-*.r2.dev URLs can fail to decode on some mobile browsers even
+    // when the HTTP response is 200. Routing them via /apps/colour-gallery?r2key=
+    // serves the image server-side (authenticated from R2) and is guaranteed to
+    // work since the app proxy URL is always in the storefront CSP allowlist.
+    previews.forEach(function (p) {
+      if (p.imageUrl && p.imageUrl.includes(".r2.dev/")) {
+        try {
+          var r2key = new URL(p.imageUrl).pathname.slice(1); // strip leading "/"
+          p.imageUrl = "/apps/colour-gallery?r2key=" + encodeURIComponent(r2key);
+        } catch (_) { /* keep original if URL parse fails */ }
+      }
+    });
+
     // SEO add-on: use "{Product Name} in {Colour Name}" as alt text on every
     // preview image so Google can index fabric colour variations as real text.
     // Falls back to bare colour name when the add-on is not active.
