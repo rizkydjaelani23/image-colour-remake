@@ -35,9 +35,9 @@
     img.removeAttribute("data-src");
 
     if (!src) {
-      // No image URL — stop shimmer immediately, grey tile shows via background
+      // No image URL — stop shimmer immediately, grey tile shows via CSS background
       img.classList.remove("pcg-lazy");
-      img.src = GREY_SVG;
+      img.src = BLANK_GIF;
       return;
     }
 
@@ -45,8 +45,14 @@
       img.classList.remove("pcg-lazy"); // stop shimmer, real image is ready
     };
     img.onerror = function () {
+      // Null onerror FIRST to prevent an infinite loop if the fallback data URI
+      // is blocked by the storefront CSP (e.g. data:image/svg+xml restrictions).
+      // Use BLANK_GIF (data:image/gif — universally CSP-safe) instead of GREY_SVG;
+      // the #ebebeb grey appearance already comes from the CSS background property.
+      img.onerror = null;
+      img.onload  = null;
       img.classList.remove("pcg-lazy"); // stop shimmer
-      img.src = GREY_SVG;              // solid grey instead of broken-image icon
+      img.src = BLANK_GIF;             // transparent 1×1 — grey shows via CSS bg
     };
     img.src = src;
   }
