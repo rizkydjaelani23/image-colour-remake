@@ -52,6 +52,18 @@ export function isFluxEnabled(): boolean {
 // Set FLUX_MODEL in Railway to override.
 const FAL_MODEL = process.env.FLUX_MODEL?.trim() || "fal-ai/flux-pro/kontext";
 
+// Multi-image model — takes the bed AND the swatch as visual references, so the
+// rendered fabric matches the actual swatch's colour + texture (not a guess).
+const FAL_MODEL_MULTI = process.env.FLUX_MODEL_MULTI?.trim() || "fal-ai/flux-pro/kontext/max/multi";
+
+// Opt-in: when FLUX_USE_SWATCH_REFERENCE is true, the swatch image is passed as a
+// visual reference via the multi model (pricier, ~$0.08–0.10, pixel-faithful to the
+// swatch). When false, only the extracted hex + text describe the fabric (cheaper).
+function swatchReferenceEnabled(): boolean {
+  const v = (process.env.FLUX_USE_SWATCH_REFERENCE ?? "").trim().toLowerCase();
+  return v === "true" || v === "1" || v === "yes" || v === "on";
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Lazy fal.ai client
 // ─────────────────────────────────────────────────────────────────────────────
@@ -156,6 +168,26 @@ function buildKontextPrompt(
   );
 }
 
+/** Prompt for the multi-image model: image 1 = bed, image 2 = fabric swatch. */
+function buildSwatchRefPrompt(
+  fabricFamily: string,
+  colourName: string,
+  hex: string,
+): string {
+  const fabric = getFabricDescriptor(fabricFamily);
+  return (
+    `The first image is a bed. The second image is a fabric swatch. ` +
+    `Reupholster the bed using the exact fabric shown in the second image — ` +
+    `match its precise colour (${colourName}, ${hex}) and its real surface texture, ` +
+    `weave and the way it catches light (${fabric}). ` +
+    `Apply this fabric to the headboard, divan base and footboard. ` +
+    `Keep the bed frame shape, panel stitching, headboard silhouette, footboard, ` +
+    `room background, bedding, pillows, lighting and shadows completely identical. ` +
+    `Only the upholstery fabric changes. ` +
+    `High-end photorealistic furniture product photography, sharp fabric detail.`
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Deterministic seed — same product+zone always gets the same framing
 // ─────────────────────────────────────────────────────────────────────────────
@@ -226,13 +258,14 @@ export async function runFluxGeneration(
 
   await onProgress?.(15);
 
-  // ── Step 2: Extract hex colour from swatch ─────────────────────────────
+  // ── Step 2: Extract hex colour from swatch (keep buffer for reference mode) ──
   let hex = "#808080"; // fallback grey
+  let swatchBuffer: Buffer | null = null;
   if (swatchImageUrl) {
     try {
       const swatchRes = await fetch(swatchImageUrl);
       if (swatchRes.ok) {
-        const swatchBuffer = Buffer.from(await swatchRes.arrayBuffer());
+        swatchBuffer = Buffer.from(await swatchRes.arrayBuffer());
         hex = await swatchToHex(swatchBuffer);
       }
     } catch (err) {
@@ -240,7 +273,10 @@ export async function runFluxGeneration(
     }
   }
 
-  const prompt = buildKontextPrompt(fabricFamily, colourName, hex);
+  const useSwatchRef = swatchReferenceEnabled() && !!swatchBuffer;
+  const prompt = useSwatchRef
+    ? buildSwatchRefPrompt(fabricFamily, colourName, hex)
+    : buildKontextPrompt(fabricFamily, colourName, hex);
   const seed   = getSeedForProduct(productId, zoneId);
 
   console.log(
@@ -250,30 +286,53 @@ export async function runFluxGeneration(
 
   await onProgress?.(25);
 
-  // ── Step 3: Upload product image to fal.ai storage ────────────────────
+  // ── Step 3: Upload product image (and swatch, in reference mode) ───────
   const uploadedImageUrl = await fal.storage.upload(
     new File([productBuffer], "product.jpg", { type: "image/jpeg" }),
   );
+
+  let uploadedSwatchUrl: string | null = null;
+  if (useSwatchRef && swatchBuffer) {
+    uploadedSwatchUrl = await fal.storage.upload(
+      new File([new Uint8Array(swatchBuffer)], "swatch.jpg", { type: "image/jpeg" }),
+    );
+  }
 
   await onProgress?.(35);
 
   // ── Step 4: Run Kontext ────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const result = await (fal as any).subscribe(FAL_MODEL, {
-    input: {
-      image_url:           uploadedImageUrl,
-      prompt,
-      num_inference_steps: 35,   // was 28 — sharper fabric detail
-      guidance_scale:      4.0,  // was 2.5 — follows the texture instruction much more closely
-      safety_tolerance:    "6",
-      seed,                      // deterministic per product+zone — keeps framing identical across colours
-    },
-    logs: false,
-    onQueueUpdate: async (update: { status: string }) => {
-      if (update.status === "IN_QUEUE")    await onProgress?.(40);
-      if (update.status === "IN_PROGRESS") await onProgress?.(60);
-    },
-  });
+  const onQueueUpdate = async (update: { status: string }) => {
+    if (update.status === "IN_QUEUE")    await onProgress?.(40);
+    if (update.status === "IN_PROGRESS") await onProgress?.(60);
+  };
+
+  const sharedInput = {
+    prompt,
+    num_inference_steps: 35,   // sharper fabric detail
+    guidance_scale:      4.0,  // follows the texture instruction closely
+    safety_tolerance:    "6",
+    seed,                      // deterministic per product+zone — identical framing across colours
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let result;
+  if (useSwatchRef && uploadedSwatchUrl) {
+    console.log(`[flux] swatch-reference mode → ${FAL_MODEL_MULTI} (bed + swatch)`);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    result = await (fal as any).subscribe(FAL_MODEL_MULTI, {
+      input: { ...sharedInput, image_urls: [uploadedImageUrl, uploadedSwatchUrl] },
+      logs: false,
+      onQueueUpdate,
+    });
+  } else {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    result = await (fal as any).subscribe(FAL_MODEL, {
+      input: { ...sharedInput, image_url: uploadedImageUrl },
+      logs: false,
+      onQueueUpdate,
+    });
+  }
 
   await onProgress?.(75);
 
