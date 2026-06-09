@@ -45,9 +45,11 @@ export function isFluxEnabled(): boolean {
 // Model
 // ─────────────────────────────────────────────────────────────────────────────
 
-// kontext/max follows instructions and renders fabric texture noticeably better
-// than the base kontext model — closer to ChatGPT-grade realism.
-const FAL_MODEL = "fal-ai/flux-pro/kontext/max" as const;
+// Model is env-configurable so you can balance cost vs quality without redeploys:
+//   fal-ai/flux-pro/kontext      → ~$0.04/image, great with the prompt below (DEFAULT, cheap)
+//   fal-ai/flux-pro/kontext/max  → ~$0.08/image, best texture fidelity (use for hero shots)
+// Set FLUX_MODEL in Railway to override.
+const FAL_MODEL = process.env.FLUX_MODEL?.trim() || "fal-ai/flux-pro/kontext";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Lazy fal.ai client
@@ -65,17 +67,46 @@ async function getFalClient() {
 // Colour helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+const toHexByte = (n: number) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, "0");
+
 /**
- * Extract the dominant hex colour from a swatch image buffer.
- * Uses sharp's stats() on a downscaled version for speed.
+ * Extract the TRUE fabric colour from a swatch image buffer.
+ *
+ * A textured swatch (crushed velvet, mink, bouclé…) contains bright highlights
+ * where the pile catches the light and dark recesses in the folds. Sharp's
+ * `stats.dominant` and a naive average both get pulled toward those extremes,
+ * producing a washed-out or muddy hex. Here we average only the mid-tone pixels
+ * — the actual fabric colour — by discarding near-white highlights and near-black
+ * shadows first. Falls back to dominant if too few mid-tones remain.
  */
 async function swatchToHex(swatchBuffer: Buffer): Promise<string> {
-  const stats = await sharp(swatchBuffer)
-    .resize(50, 50, { fit: "cover" })
-    .stats();
+  try {
+    const { data } = await sharp(swatchBuffer)
+      .resize(100, 100, { fit: "cover" })
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    let rSum = 0, gSum = 0, bSum = 0, n = 0;
+    for (let i = 0; i < data.length; i += 3) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      if (mx > 235 && mn > 210) continue; // near-white crush highlight — skip
+      if (mx < 28) continue;              // near-black deep shadow — skip
+      rSum += r; gSum += g; bSum += b; n++;
+    }
+
+    if (n >= 80) {
+      return `#${toHexByte(rSum / n)}${toHexByte(gSum / n)}${toHexByte(bSum / n)}`;
+    }
+  } catch (err) {
+    console.warn("[flux] mid-tone swatch extraction failed, falling back to dominant:", err);
+  }
+
+  // Fallback: dominant colour
+  const stats = await sharp(swatchBuffer).resize(50, 50, { fit: "cover" }).stats();
   const { r, g, b } = stats.dominant;
-  const toHex = (n: number) => Math.round(n).toString(16).padStart(2, "0");
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  return `#${toHexByte(r)}${toHexByte(g)}${toHexByte(b)}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
