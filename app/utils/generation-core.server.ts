@@ -363,6 +363,13 @@ async function createDistanceFabricLayer(
     .toBuffer();
 }
 
+// Colour-anchor strength: how strongly the final masked region is pulled toward
+// the true swatch hue/saturation (preserving the pipeline's realistic luminance).
+//   0   = off (old behaviour, warm cast + desaturation remains)
+//   0.65= recolour ~two-thirds toward the physical swatch colour (recommended)
+//   1.0 = force the masked mean to exactly the swatch hue (can look flat)
+const COLOUR_ANCHOR_STRENGTH = 0.65;
+
 export async function buildRealisticComposite(params: {
   baseBuffer: Buffer;
   swatchBuffer: Buffer;
@@ -456,6 +463,9 @@ export async function buildRealisticComposite(params: {
   // Smaller chunk = more frequent yields = snappier page navigation during generation.
   const CHUNK = 10_000;
 
+  // Accumulators for the colour-anchor pass — mean colour of the masked output.
+  let sumOutR = 0, sumOutG = 0, sumOutB = 0, maskedCount = 0;
+
   for (let i = 0; i < width * height; i++) {
     const idx = i * 4;
     const maskValue = maskRaw.data[i] / 255;
@@ -529,9 +539,52 @@ export async function buildRealisticComposite(params: {
     out[idx + 2] = Math.max(0, Math.min(255, Math.round(nb * (1 - alpha) + fb * boost * alpha)));
     out[idx + 3] = 255;
 
+    // Accumulate strongly-masked pixels for the colour-anchor mean
+    if (maskValue > 0.5) {
+      sumOutR += out[idx]; sumOutG += out[idx + 1]; sumOutB += out[idx + 2];
+      maskedCount++;
+    }
+
     // Yield every CHUNK pixels so HTTP requests can be serviced between chunks
     if (i > 0 && i % CHUNK === 0) {
       await new Promise<void>((r) => setImmediate(r));
+    }
+  }
+
+  // ── Colour-anchor pass ────────────────────────────────────────────────────
+  // The compositing above blends ~15-30% of the warm taupe base photo into every
+  // masked pixel, which tints the result and desaturates it away from the true
+  // swatch colour. Here we measure the masked region's mean colour and shift it
+  // toward the swatch's hue/saturation — while keeping each pixel's own luminance
+  // (so the lighting, shadows and texture the pipeline built stay intact).
+  if (COLOUR_ANCHOR_STRENGTH > 0 && maskedCount > 0) {
+    const meanR = sumOutR / maskedCount;
+    const meanG = sumOutG / maskedCount;
+    const meanB = sumOutB / maskedCount;
+    const meanLum   = 0.299 * meanR  + 0.587 * meanG  + 0.114 * meanB;
+    const swatchLum = 0.299 * sAvgR  + 0.587 * sAvgG  + 0.114 * sAvgB;
+
+    if (swatchLum > 1) {
+      // Target = the swatch's colour ratios applied at the pipeline's own
+      // luminance. Matches hue + saturation without changing brightness.
+      const tR = meanLum * (sAvgR / swatchLum);
+      const tG = meanLum * (sAvgG / swatchLum);
+      const tB = meanLum * (sAvgB / swatchLum);
+      const corrR = (tR - meanR) * COLOUR_ANCHOR_STRENGTH;
+      const corrG = (tG - meanG) * COLOUR_ANCHOR_STRENGTH;
+      const corrB = (tB - meanB) * COLOUR_ANCHOR_STRENGTH;
+
+      for (let i = 0; i < width * height; i++) {
+        const m = maskRaw.data[i] / 255;
+        if (m < 0.01) continue;
+        const idx = i * 4;
+        out[idx]     = Math.max(0, Math.min(255, Math.round(out[idx]     + corrR * m)));
+        out[idx + 1] = Math.max(0, Math.min(255, Math.round(out[idx + 1] + corrG * m)));
+        out[idx + 2] = Math.max(0, Math.min(255, Math.round(out[idx + 2] + corrB * m)));
+        if (i > 0 && i % CHUNK === 0) {
+          await new Promise<void>((r) => setImmediate(r));
+        }
+      }
     }
   }
 
