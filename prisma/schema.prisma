@@ -208,6 +208,12 @@ model ShopUsage {
   shopId       String   @unique
   previewCount Int      @default(0)
   previewLimit Int      @default(50)
+  // HD (FLUX) render tokens — 1 token = 1 HD render.
+  // hdTokensUsed + hdTokenLimit reset each billing cycle; hdTokensExtra (paid
+  // top-up packs) persists across cycles and is consumed after the monthly grant.
+  hdTokensUsed  Int     @default(0)
+  hdTokenLimit  Int     @default(3)
+  hdTokensExtra Int     @default(0)
   periodStart  DateTime @default(now())
   periodEnd    DateTime
   createdAt    DateTime @default(now())

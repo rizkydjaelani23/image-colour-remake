@@ -17,6 +17,10 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
 import { isFluxEnabled, runFluxGeneration } from "../utils/generation-flux.server";
+import { getOrCreateShop } from "../utils/shop.server";
+import { getCurrentBillingPlan } from "../utils/billing.server";
+import { syncShopUsage } from "../utils/usage.server";
+import { getHdTokenStatus, consumeHdToken, refundHdToken } from "../utils/hd-tokens.server";
 
 // Max previews accepted per request
 const MAX_BATCH = 100;
@@ -55,7 +59,7 @@ async function withConcurrency<T>(
 // Background processor — fires after HTTP response is sent
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function processHdRenders(previewIds: string[]) {
+async function processHdRenders(previewIds: string[], shopId: string) {
   // Load all previews with the data runFluxGeneration needs
   const previews = await prisma.preview.findMany({
     where: { id: { in: previewIds } },
@@ -69,6 +73,13 @@ async function processHdRenders(previewIds: string[]) {
   const tasks = previews
     .filter((p) => !!p.product?.imageUrl)   // skip if no product image
     .map((preview) => async () => {
+      // Consume one HD token before rendering. Action already capped the batch
+      // to available tokens, but we re-check here as a concurrency safety net.
+      const hasToken = await consumeHdToken(shopId);
+      if (!hasToken) {
+        console.warn(`[bulk-hd] ⛔ out of HD tokens, skipping ${preview.id}`);
+        return;
+      }
       try {
         await runFluxGeneration({
           shopId:           preview.shopId,
@@ -84,7 +95,9 @@ async function processHdRenders(previewIds: string[]) {
         });
         console.log(`[bulk-hd] ✅ done: ${preview.fabricFamily}/${preview.colourName} (${preview.id})`);
       } catch (err) {
-        console.error(`[bulk-hd] ❌ failed: ${preview.id}`, err);
+        // Render failed — refund the token so the merchant isn't charged for it
+        await refundHdToken(shopId).catch(() => {});
+        console.error(`[bulk-hd] ❌ failed (token refunded): ${preview.id}`, err);
       }
     });
 
@@ -100,7 +113,7 @@ async function processHdRenders(previewIds: string[]) {
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
-    await authenticate.admin(request);
+    const { session, admin } = await authenticate.admin(request);
 
     if (!isFluxEnabled()) {
       return Response.json(
@@ -166,17 +179,56 @@ export async function action({ request }: ActionFunctionArgs) {
       );
     }
 
+    // ── HD token quota enforcement ─────────────────────────────────────
+    // Resolve this shop, sync its HD token allowance from the current plan,
+    // then cap the batch to however many tokens are actually available.
+    const shop = await getOrCreateShop(session.shop);
+    const { hdTokenLimit, apiSucceeded } = await getCurrentBillingPlan(admin);
+    await syncShopUsage({
+      shopId:            shop.id,
+      previewLimit:      0,            // unchanged here; preview limit handled elsewhere
+      hdTokenLimit,
+      resetExpiredCycle: true,
+      updateLimit:       apiSucceeded, // don't overwrite stored limit on API failure
+    });
+
+    const hdStatus = await getHdTokenStatus(shop.id);
+
+    if (hdStatus.available <= 0) {
+      return Response.json(
+        {
+          error:          "You've used all your HD render tokens for this billing cycle.",
+          hdLimitReached: true,
+          hdAvailable:    0,
+          hdUsed:         hdStatus.used,
+          hdLimit:        hdStatus.limit,
+        },
+        { status: 402 },
+      );
+    }
+
+    // Cap the batch to available tokens; the rest are blocked by quota
+    const toRender       = validIds.slice(0, hdStatus.available);
+    const blockedByQuota = validIds.length - toRender.length;
+
     // ── Fire background processing — don't await ───────────────────────
     // Railway runs a persistent Node.js server so background tasks survive
     // after the HTTP response is sent. This is intentional.
     setImmediate(() => {
-      processHdRenders(validIds).catch((err) =>
+      processHdRenders(toRender, shop.id).catch((err) =>
         console.error("[bulk-hd] processHdRenders crash:", err),
       );
     });
 
     return Response.json(
-      { ok: true, queued: validIds.length, skipped: skippedIds },
+      {
+        ok:             true,
+        queued:         toRender.length,
+        skipped:        skippedIds,
+        blockedByQuota,                                  // couldn't run — out of tokens
+        hdRemaining:    hdStatus.available - toRender.length,
+        hdLimitReached: blockedByQuota > 0,
+      },
       { status: 202 },
     );
   } catch (err) {

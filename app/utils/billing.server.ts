@@ -2,6 +2,22 @@ const DEFAULT_SHOPIFY_APP_HANDLE = "image-colour-remake-2";
 export const FREE_PREVIEW_LIMIT = 50;
 export const PRO_PREVIEW_LIMIT = 999999;
 
+// ── HD (FLUX) render token allocations, per billing cycle ─────────────────────
+// 1 token = 1 HD render (~$0.04 fal.ai cost). These are the monthly INCLUDED
+// amounts; merchants buy top-up packs for more (hdTokensExtra). Tuned so HD
+// cost stays a small fraction of plan revenue.
+export const FREE_HD_TOKENS    = 3;    // taster
+export const PRO_HD_TOKENS     = 100;  // Pro $29.99 → ~$4/mo fal cost (13%)
+export const PRO_SEO_HD_TOKENS = 150;  // Pro + SEO $44.99 → ~$6/mo fal cost
+
+/** Monthly included HD tokens for a given Shopify plan name. */
+export function getHdTokenLimitForPlan(planName: string | null | undefined): number {
+  const n = (planName || "").trim().toLowerCase();
+  if (isFreePlanName(planName)) return FREE_HD_TOKENS;
+  if (n.includes("seo"))        return PRO_SEO_HD_TOKENS;
+  return PRO_HD_TOKENS; // any other active paid plan
+}
+
 type ShopifyAdminClient = {
   graphql: (query: string) => Promise<Response>;
 };
@@ -39,6 +55,7 @@ export function getManagedPricingUrl(shopDomain: string) {
 export async function getCurrentBillingPlan(admin: ShopifyAdminClient) {
   let planName = "Free";
   let previewLimit = FREE_PREVIEW_LIMIT;
+  let hdTokenLimit = FREE_HD_TOKENS;
   let apiSucceeded = false;
 
   try {
@@ -67,10 +84,11 @@ export async function getCurrentBillingPlan(admin: ShopifyAdminClient) {
       planName = activeSub.name || "Pro";
       previewLimit = PRO_PREVIEW_LIMIT;
     }
+    hdTokenLimit = getHdTokenLimitForPlan(planName);
   } catch (error) {
     console.error("Failed to check subscription:", error);
     // apiSucceeded stays false — caller should not overwrite the cached DB limit
   }
 
-  return { planName, previewLimit, apiSucceeded };
+  return { planName, previewLimit, hdTokenLimit, apiSucceeded };
 }
