@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import type { CSSProperties } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
@@ -236,6 +236,17 @@ export default function PreviewManagerPage() {
   // HD rendering
   const [hdRenderingIds, setHdRenderingIds] = useState<Set<string>>(new Set());
   const [hdToast, setHdToast] = useState<string | null>(null);
+  const [hdTokens, setHdTokens] = useState<{ used: number; limit: number; extra: number; available: number; enabled: boolean } | null>(null);
+
+  async function loadHdTokens() {
+    try {
+      const res = await fetch("/api/hd-tokens");
+      if (res.ok) setHdTokens(await res.json());
+    } catch { /* non-fatal */ }
+  }
+
+  // Load HD token balance on mount
+  useEffect(() => { loadHdTokens(); }, []);
 
   async function loadPreviews(forcedProductId?: string) {
     const idToUse = (forcedProductId || productId).trim();
@@ -520,10 +531,15 @@ export default function PreviewManagerPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "HD render failed");
-      setHdToast(`✨ HD render queued for ${data.queued} preview${data.queued !== 1 ? "s" : ""}. Images update in ~30–60s.`);
+      const blockedMsg = data.blockedByQuota > 0
+        ? ` (${data.blockedByQuota} skipped — out of HD tokens)`
+        : "";
+      setHdToast(`✨ HD render queued for ${data.queued} preview${data.queued !== 1 ? "s" : ""}${blockedMsg}. Images update in ~30–60s.`);
+      loadHdTokens(); // refresh the remaining-token badge
       // Auto-reload after ~50 s to pick up the new HD images, then clear spinner
       setTimeout(() => {
         if (productId) loadPreviews();
+        loadHdTokens(); // tokens settle once renders finish/refund
         setHdRenderingIds((prev) => {
           const next = new Set(prev);
           ids.forEach((id) => next.delete(id));
@@ -1322,6 +1338,38 @@ export default function PreviewManagerPage() {
               Clear selection
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ── HD token balance badge ── */}
+      {hdTokens && (
+        <div style={{
+          marginBottom: "16px", padding: "10px 16px", borderRadius: "12px",
+          background: !hdTokens.enabled ? "#fffbeb" : hdTokens.available === 0 ? "#fef2f2" : "#f8fafc",
+          border: !hdTokens.enabled ? "1px solid #fde68a" : hdTokens.available === 0 ? "1px solid #fecaca" : "1px solid #e2e8f0",
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{ fontSize: "18px" }}>✨</span>
+            {!hdTokens.enabled ? (
+              <span style={{ fontSize: "13px", fontWeight: 700, color: "#92400e" }}>
+                HD rendering is off — set FLUX_HD_ENABLED and FAL_KEY to enable.
+              </span>
+            ) : (
+              <span style={{ fontSize: "13px", fontWeight: 700, color: hdTokens.available === 0 ? "#b91c1c" : "#0f172a" }}>
+                HD tokens: <span style={{ fontSize: "15px" }}>{hdTokens.available}</span> remaining
+                <span style={{ fontWeight: 500, color: "#64748b" }}>
+                  {"  "}· {Math.max(0, hdTokens.limit - hdTokens.used)}/{hdTokens.limit} monthly
+                  {hdTokens.extra > 0 ? ` + ${hdTokens.extra} top-up` : ""}
+                </span>
+              </span>
+            )}
+          </div>
+          {hdTokens.enabled && hdTokens.available === 0 && (
+            <span style={{ fontSize: "12px", fontWeight: 700, color: "#b91c1c" }}>
+              Out of tokens — resets next billing cycle
+            </span>
+          )}
         </div>
       )}
 
