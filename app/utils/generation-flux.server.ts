@@ -34,11 +34,12 @@ import type { GenerationResult } from "./generation-core.server";
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function isFluxEnabled(): boolean {
-  return (
-    process.env.FLUX_HD_ENABLED === "true" &&
-    typeof process.env.FAL_KEY === "string" &&
-    process.env.FAL_KEY.trim().length > 0
-  );
+  // Tolerant of casing / whitespace / common truthy spellings so a stray
+  // "True" or " true " in the env var doesn't silently disable HD.
+  const flag = (process.env.FLUX_HD_ENABLED ?? "").trim().toLowerCase();
+  const enabled = flag === "true" || flag === "1" || flag === "yes" || flag === "on";
+  const hasKey  = (process.env.FAL_KEY ?? "").trim().length > 0;
+  return enabled && hasKey;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
