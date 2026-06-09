@@ -45,7 +45,9 @@ export function isFluxEnabled(): boolean {
 // Model
 // ─────────────────────────────────────────────────────────────────────────────
 
-const FAL_MODEL = "fal-ai/flux-pro/kontext" as const;
+// kontext/max follows instructions and renders fabric texture noticeably better
+// than the base kontext model — closer to ChatGPT-grade realism.
+const FAL_MODEL = "fal-ai/flux-pro/kontext/max" as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Lazy fal.ai client
@@ -80,16 +82,18 @@ async function swatchToHex(swatchBuffer: Buffer): Promise<string> {
 // Fabric descriptors
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Texture-forward descriptors — these tell the model HOW the fabric catches light,
+// so it renders the actual motif (crush marks, sheen, nap) instead of a flat colour.
 const FABRIC_DESCRIPTORS: Record<string, string> = {
-  plush:    "plush velvet",
-  velvet:   "crushed velvet",
-  velvetto: "velvetto velvet",
-  mink:     "mink velvet",
-  suede:    "microfibre suede",
-  venice:   "Venice fabric",
-  boucle:   "bouclé",
-  chenille: "chenille",
-  naples:   "Naples velvet",
+  plush:    "plush velvet with a soft even sheen and deep light-absorbing pile",
+  velvet:   "crushed velvet with an irregular crushed texture that catches the light unevenly, with bright shimmering silvery highlights on the raised crush marks and darker recessed folds throughout the fabric",
+  velvetto: "velvetto velvet with a smooth lustrous sheen and gentle light reflection",
+  mink:     "mink velvet with an ultra-soft short dense pile and a gentle directional sheen",
+  suede:    "microfibre suede with a soft matte nap and subtle directional shading",
+  venice:   "Venice fabric with a fine tight woven texture and matte finish",
+  boucle:   "bouclé fabric with a looped, nubby, textured woven surface",
+  chenille: "chenille with a soft fuzzy ribbed velvety texture",
+  naples:   "Naples velvet with a smooth refined sheen and soft pile",
 };
 
 function getFabricDescriptor(fabricFamily: string): string {
@@ -109,11 +113,14 @@ function buildKontextPrompt(
 ): string {
   const fabric = getFabricDescriptor(fabricFamily);
   return (
-    `Change the upholstery fabric colour to ${colourName} (${hex}) ${fabric}. ` +
-    `Keep the bed frame shape, stitching, headboard silhouette, divan base, footboard, ` +
-    `room background, pillows, lighting and shadows completely identical. ` +
-    `Only the fabric colour and texture changes. ` +
-    `Photorealistic furniture product photography.`
+    `Reupholster the bed in ${colourName} ${fabric}. ` +
+    `The fabric colour must be exactly ${hex}. ` +
+    `Render the fabric texture prominently and realistically — show the true surface ` +
+    `detail and the way the material catches the light, not a flat colour fill. ` +
+    `Keep the bed frame shape, panel stitching, headboard silhouette, divan base, ` +
+    `footboard, room background, bedding, pillows, lighting and shadows completely identical. ` +
+    `Only the upholstery fabric colour and surface texture changes. ` +
+    `High-end photorealistic furniture product photography, sharp fabric detail.`
   );
 }
 
@@ -224,10 +231,10 @@ export async function runFluxGeneration(
     input: {
       image_url:           uploadedImageUrl,
       prompt,
-      num_inference_steps: 28,
-      guidance_scale:      2.5,
+      num_inference_steps: 35,   // was 28 — sharper fabric detail
+      guidance_scale:      4.0,  // was 2.5 — follows the texture instruction much more closely
       safety_tolerance:    "6",
-      seed,
+      seed,                      // deterministic per product+zone — keeps framing identical across colours
     },
     logs: false,
     onQueueUpdate: async (update: { status: string }) => {
