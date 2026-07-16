@@ -8,6 +8,7 @@ import sharp from "sharp";
 import prisma from "./db.server";
 import { uploadBufferToStorage } from "./storage.server";
 import { safeFolderName } from "./visualiser.server";
+import { recolourV2 } from "./recolour-v2.server";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -672,17 +673,14 @@ export async function runGeneration(
     await onProgress?.(40);
   }
 
-  const tileScale     = 0.14;
-  const blendStrength = 0.70; // was 0.75 — lets more base shadow through for soft-texture fabrics
-
-  const finalComposite = await buildRealisticComposite({
+  // V2 engine — LAB colour transfer + amplitude-clamped swatch texture, with
+  // smooth-material (leather/vinyl) texture suppression. Replaces the old
+  // buildRealisticComposite renderer; the zone/mask/preview machinery around
+  // it is unchanged.
+  const finalComposite = await recolourV2({
     baseBuffer,
     swatchBuffer,
     maskBuffer,
-    width,
-    height,
-    tileScale,
-    blendStrength,
     fabricFamily,
     colourName,
   });
