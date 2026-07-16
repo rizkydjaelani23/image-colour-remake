@@ -177,6 +177,22 @@ async function processJob(
     const cacheKey = `${job.productId}:${job.zoneId}`;
     const shared   = bufferCache.get(cacheKey);
 
+    // Does a preview for this exact combo already exist? If so this job is an
+    // overwrite / regeneration (e.g. re-rendering with the new engine) and must
+    // NOT consume billing quota — only net-new previews count.
+    const existingPreview = await prisma.preview.findUnique({
+      where: {
+        productId_zoneId_fabricFamily_colourName: {
+          productId:    job.productId,
+          zoneId:       job.zoneId,
+          fabricFamily: job.fabricFamily,
+          colourName:   job.colourName,
+        },
+      },
+      select: { id: true },
+    });
+    const isNewPreview = !existingPreview;
+
     const result = await runGeneration(
       {
         shopId:           job.shopId,
@@ -203,16 +219,19 @@ async function processJob(
       },
     );
 
-    // Increment shop usage (DB-only — no Shopify session needed)
-    const usage = await prisma.shopUsage.findUnique({ where: { shopId: job.shopId } });
-    if (usage) {
-      const limitEnforcement = await prisma.shopUsage.updateMany({
-        where: { shopId: job.shopId, previewCount: { lt: usage.previewLimit } },
-        data:  { previewCount: { increment: 1 } },
-      });
-      if (limitEnforcement.count === 0) {
-        // Limit was hit — the preview was saved but we won't count it
-        console.warn(`[worker] job=${job.id} usage limit reached after generation`);
+    // Increment shop usage (DB-only) — ONLY for net-new previews. Overwrites /
+    // regenerations reuse an existing preview slot and don't consume quota.
+    if (isNewPreview) {
+      const usage = await prisma.shopUsage.findUnique({ where: { shopId: job.shopId } });
+      if (usage) {
+        const limitEnforcement = await prisma.shopUsage.updateMany({
+          where: { shopId: job.shopId, previewCount: { lt: usage.previewLimit } },
+          data:  { previewCount: { increment: 1 } },
+        });
+        if (limitEnforcement.count === 0) {
+          // Limit was hit — the preview was saved but we won't count it
+          console.warn(`[worker] job=${job.id} usage limit reached after generation`);
+        }
       }
     }
 

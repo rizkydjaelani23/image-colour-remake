@@ -189,6 +189,11 @@ export default function PreviewManagerPage() {
   // without triggering a full page reload.
   const [localProducts, setLocalProducts] = useState(() => productsWithPreviews);
 
+  // ── New-engine catalogue regeneration ──
+  const [regenBusy, setRegenBusy]       = useState<null | "regen" | "restore">(null);
+  const [regenMsg, setRegenMsg]         = useState<string | null>(null);
+  const [regenConfirm, setRegenConfirm] = useState<null | "regen" | "restore">(null);
+
   const [productId, setProductId] = useState("");
   const [productSearch, setProductSearch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -716,6 +721,39 @@ export default function PreviewManagerPage() {
   const approvedCount = previews.filter((p) => p.approvedForStorefront).length;
   const featuredCount = previews.filter((p) => p.featured).length;
 
+  async function runCatalogueAction(kind: "regen" | "restore") {
+    setRegenConfirm(null);
+    setRegenBusy(kind);
+    setRegenMsg(null);
+    try {
+      const url = kind === "regen" ? "/api/regenerate-catalogue" : "/api/restore-previews";
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(kind === "regen" ? { keepBackups: true } : {}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Request failed");
+      if (kind === "regen") {
+        setRegenMsg(
+          `Queued ${data.queued} preview${data.queued === 1 ? "" : "s"} to re-render with the new engine` +
+          (data.backedUp ? ` · backed up ${data.backedUp} original${data.backedUp === 1 ? "" : "s"}` : "") +
+          (data.skipped ? ` · skipped ${data.skipped} (no saved swatch)` : "") +
+          `. They'll update over the next few minutes.`
+        );
+      } else {
+        setRegenMsg(
+          `Restored ${data.restored} preview${data.restored === 1 ? "" : "s"} from backup` +
+          (data.missing ? ` · ${data.missing} had no backup` : "") + `.`
+        );
+      }
+    } catch (e) {
+      setRegenMsg(e instanceof Error ? e.message : "Something went wrong");
+    } finally {
+      setRegenBusy(null);
+    }
+  }
+
   return (
     <div style={pageStyle}>
       <style>{`
@@ -760,6 +798,78 @@ export default function PreviewManagerPage() {
             ))}
           </div>
         </div>
+      </div>
+
+      {/* ── New rendering engine ── */}
+      <div style={{ ...cardStyle, marginBottom: "20px", border: "1px solid #c7d2fe", background: "#f8faff" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px", flexWrap: "wrap" }}>
+          <div style={{ maxWidth: "640px" }}>
+            <div style={{ display: "inline-flex", padding: "4px 10px", borderRadius: "999px", background: "#4338ca", color: "#fff", fontSize: "11px", fontWeight: 700, marginBottom: "10px" }}>
+              NEW RENDERING ENGINE
+            </div>
+            <div style={{ fontSize: "16px", fontWeight: 800, color: "#111827", marginBottom: "4px" }}>
+              Update your previews to the new engine
+            </div>
+            <p style={{ margin: 0, color: "#475569", fontSize: "14px", lineHeight: 1.6 }}>
+              We&apos;ve upgraded the colour and fabric rendering — more accurate colours, real velvet shimmer, and smooth leather.
+              New previews already use it. Re-render your existing previews to bring them up to date. A backup of your current
+              previews is kept, so you can restore the old look anytime.
+            </p>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px", flexShrink: 0 }}>
+            <button
+              type="button"
+              disabled={!!regenBusy}
+              onClick={() => setRegenConfirm("regen")}
+              style={{ padding: "10px 18px", borderRadius: "10px", border: "none", background: regenBusy ? "#94a3b8" : "#4338ca", color: "#fff", fontWeight: 700, fontSize: "14px", cursor: regenBusy ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}
+            >
+              {regenBusy === "regen" ? "Queuing…" : "Regenerate all with new engine"}
+            </button>
+            <button
+              type="button"
+              disabled={!!regenBusy}
+              onClick={() => setRegenConfirm("restore")}
+              style={{ padding: "9px 18px", borderRadius: "10px", border: "1px solid #cbd5e1", background: "#fff", color: "#475569", fontWeight: 600, fontSize: "13px", cursor: regenBusy ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}
+            >
+              {regenBusy === "restore" ? "Restoring…" : "Restore previous previews"}
+            </button>
+          </div>
+        </div>
+
+        {regenConfirm && (
+          <div style={{ marginTop: "14px", padding: "14px 16px", borderRadius: "12px", background: "#fff", border: "1px solid #e5e7eb" }}>
+            <div style={{ fontSize: "14px", fontWeight: 700, color: "#111827", marginBottom: "4px" }}>
+              {regenConfirm === "regen" ? "Regenerate every preview?" : "Restore previous previews?"}
+            </div>
+            <p style={{ margin: "0 0 12px", color: "#475569", fontSize: "13px", lineHeight: 1.6 }}>
+              {regenConfirm === "regen"
+                ? "This re-renders all of your existing previews with the new engine and keeps a backup of the current versions. It runs in the background and doesn't use any of your monthly preview allowance."
+                : "This puts back the previews from before the last regeneration, using the saved backups."}
+            </p>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button
+                type="button"
+                onClick={() => runCatalogueAction(regenConfirm)}
+                style={{ padding: "8px 16px", borderRadius: "9px", border: "none", background: "#4338ca", color: "#fff", fontWeight: 700, fontSize: "13px", cursor: "pointer" }}
+              >
+                {regenConfirm === "regen" ? "Yes, regenerate all" : "Yes, restore"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setRegenConfirm(null)}
+                style={{ padding: "8px 16px", borderRadius: "9px", border: "1px solid #cbd5e1", background: "#fff", color: "#475569", fontWeight: 600, fontSize: "13px", cursor: "pointer" }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {regenMsg && (
+          <div style={{ marginTop: "12px", padding: "12px 14px", borderRadius: "10px", background: "#ecfdf5", border: "1px solid #a7f3d0", color: "#065f46", fontSize: "13px", lineHeight: 1.5 }}>
+            {regenMsg}
+          </div>
+        )}
       </div>
 
       {/* ── Product picker ── */}
