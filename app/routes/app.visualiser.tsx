@@ -29,9 +29,11 @@ type SavedMaskEntry = {
   };
 };
 
+type PickerCollection = { id: string; title: string; count: number | null };
+
 type LoaderData = {
   apiKey: string;
-  allProducts: ShopifyProductSummary[];
+  collections: PickerCollection[];
   previewManagerIds: string[];
   savedMasks: SavedMaskEntry[];
 };
@@ -75,70 +77,42 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
   const shop = await getOrCreateShop(session.shop);
 
-  // Fetch ALL Shopify products for the custom picker using cursor pagination.
-  // Shopify caps each request at 250 — we loop until hasNextPage is false.
-  let allProducts: ShopifyProductSummary[] = [];
+  // Fetch only the COLLECTIONS list for the picker (cheap — a store has a handful
+  // of collections, not thousands of products). Products for the chosen collection
+  // are loaded on demand via /api/visualiser-products, so the page renders instantly
+  // instead of paginating the entire catalogue on every visit.
+  const collections: PickerCollection[] = [];
   try {
     let cursor: string | null = null;
     let hasNextPage = true;
-
     while (hasNextPage) {
       const res = await admin.graphql(
         `query ($cursor: String) {
-          products(first: 250, after: $cursor, sortKey: TITLE) {
+          collections(first: 250, after: $cursor, sortKey: TITLE) {
             pageInfo { hasNextPage endCursor }
-            edges {
-              node {
-                id
-                title
-                status
-                featuredImage { url }
-                collections(first: 10) {
-                  edges { node { id title } }
-                }
-              }
-            }
+            edges { node { id title productsCount { count } } }
           }
         }`,
         { variables: { cursor } },
       );
-
       const json = await res.json() as {
         data?: {
-          products?: {
+          collections?: {
             pageInfo: { hasNextPage: boolean; endCursor: string | null };
-            edges?: Array<{
-              node: {
-                id: string;
-                title: string;
-                status: string;
-                featuredImage: { url: string } | null;
-                collections: { edges: Array<{ node: { id: string; title: string } }> };
-              };
-            }>;
+            edges?: Array<{ node: { id: string; title: string; productsCount: { count: number } | null } }>;
           };
         };
       };
-
-      const page = json.data?.products;
+      const page = json.data?.collections;
       if (!page) break;
-
       for (const e of page.edges ?? []) {
-        allProducts.push({
-          id: e.node.id,
-          title: e.node.title,
-          status: e.node.status as ProductStatus,
-          image: e.node.featuredImage?.url ?? null,
-          rank: 0, // unused — kept for type compatibility
-          collections: (e.node.collections?.edges ?? []).map((ce) => ({ id: ce.node.id, title: ce.node.title })),
-        });
+        collections.push({ id: e.node.id, title: e.node.title, count: e.node.productsCount?.count ?? null });
       }
-
       hasNextPage = page.pageInfo.hasNextPage;
       cursor = page.pageInfo.endCursor ?? null;
     }
   } catch (e) {
-    console.error("Failed to fetch products for picker:", e);
+    console.error("Failed to fetch collections for picker:", e);
   }
 
   // Which products already have previews in the preview manager?
@@ -172,35 +146,54 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "",
-    allProducts,
+    collections,
     previewManagerIds,
     savedMasks,
   } satisfies LoaderData;
 }
 
 export default function VisualiserPage() {
-  const { allProducts, previewManagerIds, savedMasks } = useLoaderData<typeof loader>();
+  const { collections, previewManagerIds, savedMasks } = useLoaderData<typeof loader>();
 
   // ── Custom product picker state ───────────────────────────────────────────
   const [showProductPicker, setShowProductPicker] = useState(false);
   const [pickerSearch, setPickerSearch] = useState("");
   const [pickerStatusFilter, setPickerStatusFilter] = useState<"ALL" | ProductStatus>("ALL");
-  const [pickerCollectionFilter, setPickerCollectionFilter] = useState<string>("ALL");
+  // "" = nothing chosen yet; "ALL" = whole catalogue; otherwise a collection id.
+  const [pickerCollectionFilter, setPickerCollectionFilter] = useState<string>("");
+
+  // Products load on demand for the chosen collection (or all), not on page load.
+  const [allProducts, setAllProducts] = useState<ShopifyProductSummary[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [productsError, setProductsError] = useState<string | null>(null);
 
   const previewManagerSet = useMemo(() => new Set(previewManagerIds), [previewManagerIds]);
 
-  // Sorted unique collection list across all products
-  const pickerCollections = useMemo(() => {
-    const seen = new Map<string, string>(); // id → title
-    for (const p of allProducts) {
-      for (const c of p.collections) {
-        if (!seen.has(c.id)) seen.set(c.id, c.title);
-      }
+  // Collections come straight from the loader (cheap to fetch).
+  const pickerCollections = collections;
+
+  async function loadProductsForCollection(value: string) {
+    setPickerCollectionFilter(value);
+    setAllProducts([]);
+    setProductsError(null);
+    if (!value) return; // placeholder chosen — load nothing
+    setProductsLoading(true);
+    try {
+      const url = value === "ALL"
+        ? "/api/visualiser-products?all=1"
+        : `/api/visualiser-products?collectionId=${encodeURIComponent(value)}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setAllProducts(
+        (data.products ?? []).map((p: Omit<ShopifyProductSummary, "rank">) => ({ ...p, rank: 0 })),
+      );
+    } catch (e) {
+      setProductsError(e instanceof Error ? e.message : "Could not load products");
+    } finally {
+      setProductsLoading(false);
     }
-    return Array.from(seen.entries())
-      .map(([id, title]) => ({ id, title }))
-      .sort((a, b) => a.title.localeCompare(b.title));
-  }, [allProducts]);
+  }
 
   // Set of lowercase titles that appear more than once (duplicates)
   const duplicateTitleSet = useMemo(() => {
@@ -216,17 +209,18 @@ export default function VisualiserPage() {
     return dupes;
   }, [allProducts]);
 
+  // Products are already scoped to the chosen collection server-side; here we
+  // only apply the status + search filters within that loaded set.
   const filteredPickerProducts = useMemo(() => {
     return allProducts.filter((p) => {
       if (pickerStatusFilter !== "ALL" && p.status !== pickerStatusFilter) return false;
-      if (pickerCollectionFilter !== "ALL" && !p.collections.some((c) => c.id === pickerCollectionFilter)) return false;
       if (pickerSearch.trim()) {
         const q = pickerSearch.trim().toLowerCase();
         if (!p.title.toLowerCase().includes(q)) return false;
       }
       return true;
     });
-  }, [allProducts, pickerSearch, pickerStatusFilter, pickerCollectionFilter]);
+  }, [allProducts, pickerSearch, pickerStatusFilter]);
 
   const pickerStatusCounts = useMemo(() => {
     const counts = { ALL: allProducts.length, ACTIVE: 0, DRAFT: 0, ARCHIVED: 0 };
@@ -1496,33 +1490,43 @@ const stepTextStyle: CSSProperties = {
                   })}
                 </div>
 
-                {/* collection filter */}
-                {pickerCollections.length > 0 && (
-                  <div style={{ padding: "8px 14px", borderBottom: "1px solid #f0f0f0" }}>
-                    <select
-                      value={pickerCollectionFilter}
-                      onChange={(e) => setPickerCollectionFilter(e.target.value)}
-                      style={{
-                        width: "100%", boxSizing: "border-box",
-                        padding: "7px 10px", borderRadius: "8px",
-                        border: "1px solid #d1d5db", fontSize: "13px",
-                        background: pickerCollectionFilter !== "ALL" ? "#eef2ff" : "#fff",
-                        color: pickerCollectionFilter !== "ALL" ? "#4338ca" : "#374151",
-                        fontWeight: pickerCollectionFilter !== "ALL" ? 600 : 400,
-                        cursor: "pointer", outline: "none",
-                      }}
-                    >
-                      <option value="ALL">All collections</option>
-                      {pickerCollections.map((c) => (
-                        <option key={c.id} value={c.id}>{c.title}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
+                {/* collection selector — choosing one loads only its products */}
+                <div style={{ padding: "8px 14px", borderBottom: "1px solid #f0f0f0" }}>
+                  <select
+                    value={pickerCollectionFilter}
+                    onChange={(e) => loadProductsForCollection(e.target.value)}
+                    style={{
+                      width: "100%", boxSizing: "border-box",
+                      padding: "7px 10px", borderRadius: "8px",
+                      border: "1px solid #d1d5db", fontSize: "13px",
+                      background: pickerCollectionFilter && pickerCollectionFilter !== "ALL" ? "#eef2ff" : "#fff",
+                      color: pickerCollectionFilter && pickerCollectionFilter !== "ALL" ? "#4338ca" : "#374151",
+                      fontWeight: pickerCollectionFilter && pickerCollectionFilter !== "ALL" ? 600 : 400,
+                      cursor: "pointer", outline: "none",
+                    }}
+                  >
+                    <option value="">— Choose a collection to load —</option>
+                    <option value="ALL">All products (slower)</option>
+                    {pickerCollections.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.title}{c.count != null ? ` (${c.count})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
                 {/* product list */}
                 <div style={{ maxHeight: "340px", overflowY: "auto" }}>
-                  {filteredPickerProducts.length === 0 ? (
+                  {!pickerCollectionFilter ? (
+                    <p style={{ padding: "24px 20px", textAlign: "center", color: "#9ca3af", fontSize: "13px", lineHeight: 1.6 }}>
+                      Choose a collection above to load its products.<br />
+                      <span style={{ color: "#c0c4cc" }}>Pick “All products” only if you need the whole catalogue.</span>
+                    </p>
+                  ) : productsLoading ? (
+                    <p style={{ padding: "24px 20px", textAlign: "center", color: "#6b7280", fontSize: "13px" }}>Loading products…</p>
+                  ) : productsError ? (
+                    <p style={{ padding: "20px", textAlign: "center", color: "#dc2626", fontSize: "13px" }}>{productsError}</p>
+                  ) : filteredPickerProducts.length === 0 ? (
                     <p style={{ padding: "20px", textAlign: "center", color: "#9ca3af", fontSize: "13px" }}>No products found</p>
                   ) : (
                     filteredPickerProducts.map((p) => {
