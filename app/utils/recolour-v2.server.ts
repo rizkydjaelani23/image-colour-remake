@@ -48,6 +48,26 @@ function isSmoothMaterial(text: string): boolean {
   return /leather|vinyl|faux|patent|pvc|pleather|gloss/i.test(text || "");
 }
 
+/** Pattern strength: medium-scale motif energy in a swatch. High = a repeating
+ *  pattern (damask, embossed) that would tile into a visible grid; low = fine
+ *  random grain (velvet, plush, linen) that tiles cleanly. Greyscale → downscale
+ *  (kills fine grain) → remove global lighting gradient → std of the residual. */
+async function patternStrength(swatchBuffer: Buffer): Promise<number> {
+  const base = sharp(swatchBuffer).removeAlpha().greyscale().resize(48, 48, { fit: "fill" });
+  const grey = await base.raw().toBuffer();
+  const blur = await sharp(await base.png().toBuffer()).blur(8).raw().toBuffer();
+  let sum = 0, sum2 = 0;
+  const n = grey.length;
+  for (let i = 0; i < n; i++) { const r = grey[i] - blur[i]; sum += r; sum2 += r * r; }
+  return Math.sqrt(sum2 / n - (sum / n) * (sum / n));
+}
+
+/** Grain amount from pattern strength: full below 8, ramps to zero by 16.
+ *  Biases toward safety — a slightly flatter fabric beats a tiled grid. */
+function texStrengthFor(ps: number): number {
+  return 0.6 * Math.max(0, Math.min(1, (16 - ps) / 8));
+}
+
 async function swatchStats(swatchBuffer: Buffer): Promise<[number, number, number]> {
   const { data, info } = await sharp(swatchBuffer)
     .resize(64, 64, { fit: "cover" }).removeAlpha().raw()
@@ -86,7 +106,11 @@ export async function recolourV2(params: RecolourV2Params): Promise<Buffer> {
   const contrast   = params.contrast   ?? 0.95;
   const adapt      = params.adapt      ?? 0.85;
   const chromaGain = params.chromaGain ?? 1.0;
-  const texStrength = isSmoothMaterial(`${fabricFamily} ${colourName}`) ? 0.05 : 0.6;
+  // Grain: 0 for smooth materials; otherwise driven by the swatch's own pattern
+  // strength so patterned swatches (damask, embossed) never tile into a grid.
+  const texStrength = isSmoothMaterial(`${fabricFamily} ${colourName}`)
+    ? 0
+    : texStrengthFor(await patternStrength(swatchBuffer));
 
   const base = sharp(baseBuffer).rotate();
   const { data, info } = await base.raw().toBuffer({ resolveWithObject: true });
