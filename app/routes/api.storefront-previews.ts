@@ -24,7 +24,8 @@ async function handleImageProxy(r2key: string): Promise<Response> {
     const bytes = await obj.Body?.transformToByteArray();
     if (!bytes) return new Response("Not found", { status: 404 });
 
-    return new Response(bytes, {
+    // Copy into a fresh ArrayBuffer-backed view so the type is a valid BodyInit.
+    return new Response(new Uint8Array(bytes), {
       status: 200,
       headers: {
         "Content-Type":                obj.ContentType ?? "image/webp",
