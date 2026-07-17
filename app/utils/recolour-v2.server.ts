@@ -125,9 +125,15 @@ export async function recolourV2(params: RecolourV2Params): Promise<Buffer> {
   const hueA = tA / Csw, hueB = tB / Csw;
   const g = await swatchGrain(swatchBuffer);
 
+  // These per-pixel loops run in JS and can't be expressed in Sharp, so we yield
+  // the event loop every CHUNK pixels — otherwise a single generation blocks all
+  // HTTP requests (zone/swatch/image loads) until it finishes.
+  const CHUNK = 40_000;
+
   // Pass 1: mean lightness of the masked region
   let sum = 0, count = 0;
   for (let p = 0, i = 0; i < data.length; i += channels, p++) {
+    if (p > 0 && p % CHUNK === 0) await new Promise<void>((r) => setImmediate(r));
     if (maskData[p] < 10) continue;
     sum += rgb2lab(data[i], data[i + 1], data[i + 2])[0];
     count++;
@@ -137,6 +143,7 @@ export async function recolourV2(params: RecolourV2Params): Promise<Buffer> {
   // Pass 2: recolour, soft-blended by the mask alpha (feathered edges preserved)
   const out = Buffer.from(data);
   for (let p = 0, i = 0; i < data.length; i += channels, p++) {
+    if (p > 0 && p % CHUNK === 0) await new Promise<void>((r) => setImmediate(r));
     const mv = maskData[p] / 255;
     if (mv < 0.004) continue;
 
