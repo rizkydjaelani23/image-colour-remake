@@ -56,6 +56,42 @@ export default function SwatchLibraryPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
+  // Rename-family state (one family at a time)
+  const [renamingFamily, setRenamingFamily] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameNotice, setRenameNotice] = useState<string | null>(null);
+
+  async function renameFamily(fromFamily: string) {
+    const toFamily = renameValue.trim();
+    if (!toFamily || toFamily === fromFamily) { setRenamingFamily(null); return; }
+    setRenameBusy(true);
+    setRenameError(null);
+    try {
+      const res = await fetch("/api/rename-family", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fromFamily, toFamily }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        let msg = data.error || "Rename failed";
+        if (data.conflicts?.swatches?.length) msg += ` Clashing colours: ${data.conflicts.swatches.join(", ")}.`;
+        throw new Error(msg);
+      }
+      // Update local grouping without a reload
+      setSwatches((prev) => prev.map((s) => (s.fabricFamily === fromFamily ? { ...s, fabricFamily: toFamily } : s)));
+      setRenameNotice(`Renamed “${fromFamily}” → “${toFamily}” · ${data.swatches} swatch${data.swatches === 1 ? "" : "es"} and ${data.previews} preview${data.previews === 1 ? "" : "s"} updated.`);
+      setRenamingFamily(null);
+      setTimeout(() => setRenameNotice(null), 6000);
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : "Rename failed");
+    } finally {
+      setRenameBusy(false);
+    }
+  }
+
   // Group by fabric family
   const filtered = swatches.filter(
     (s) =>
@@ -142,6 +178,12 @@ export default function SwatchLibraryPage() {
         />
       </div>
 
+      {renameNotice && (
+        <div style={{ marginBottom: "16px", padding: "12px 16px", borderRadius: "12px", background: "#ecfdf5", border: "1px solid #a7f3d0", color: "#065f46", fontSize: "14px", fontWeight: 600 }}>
+          {renameNotice}
+        </div>
+      )}
+
       {swatches.length === 0 ? (
         <div style={{ ...cardStyle, textAlign: "center", padding: "48px" }}>
           <div style={{ fontSize: "36px", marginBottom: "12px" }}>🧵</div>
@@ -158,13 +200,43 @@ export default function SwatchLibraryPage() {
       ) : (
         Object.entries(grouped).map(([family, items]) => (
           <div key={family} style={cardStyle}>
-            <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
-              <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 800, color: "#0f172a" }}>
-                📁 {family}
-              </h2>
-              <span style={{ fontSize: "12px", padding: "3px 10px", borderRadius: "999px", background: "#f1f5f9", color: "#64748b", fontWeight: 700 }}>
-                {items.length} {items.length === 1 ? "swatch" : "swatches"}
-              </span>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px", flexWrap: "wrap" }}>
+              {renamingFamily === family ? (
+                <>
+                  <span style={{ fontSize: "18px" }}>📁</span>
+                  <input
+                    autoFocus
+                    value={renameValue}
+                    disabled={renameBusy}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") renameFamily(family); if (e.key === "Escape") { setRenamingFamily(null); setRenameError(null); } }}
+                    style={{ padding: "6px 10px", borderRadius: "8px", border: "1px solid #c7d2fe", font: "inherit", fontSize: "16px", fontWeight: 700, width: "220px" }}
+                  />
+                  <button type="button" disabled={renameBusy} onClick={() => renameFamily(family)}
+                    style={{ padding: "6px 14px", borderRadius: "8px", border: "none", background: "#4338ca", color: "#fff", fontWeight: 700, fontSize: "13px", cursor: renameBusy ? "not-allowed" : "pointer" }}>
+                    {renameBusy ? "Saving…" : "Save"}
+                  </button>
+                  <button type="button" disabled={renameBusy} onClick={() => { setRenamingFamily(null); setRenameError(null); }}
+                    style={{ padding: "6px 12px", borderRadius: "8px", border: "1px solid #d1d5db", background: "#fff", color: "#475569", fontWeight: 600, fontSize: "13px", cursor: "pointer" }}>
+                    Cancel
+                  </button>
+                  {renameError && <span style={{ fontSize: "12px", color: "#dc2626", flexBasis: "100%" }}>{renameError}</span>}
+                </>
+              ) : (
+                <>
+                  <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 800, color: "#0f172a" }}>
+                    📁 {family}
+                  </h2>
+                  <span style={{ fontSize: "12px", padding: "3px 10px", borderRadius: "999px", background: "#f1f5f9", color: "#64748b", fontWeight: 700 }}>
+                    {items.length} {items.length === 1 ? "swatch" : "swatches"}
+                  </span>
+                  <button type="button"
+                    onClick={() => { setRenamingFamily(family); setRenameValue(family); setRenameError(null); }}
+                    style={{ padding: "4px 12px", borderRadius: "8px", border: "1px solid #c7d2fe", background: "#eef2ff", color: "#4338ca", fontWeight: 700, fontSize: "12px", cursor: "pointer" }}>
+                    Rename
+                  </button>
+                </>
+              )}
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: "12px" }}>
