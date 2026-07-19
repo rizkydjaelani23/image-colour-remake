@@ -867,6 +867,27 @@ export default function VisualiserPage() {
     setSelectedRecentSwatchIds(recentSwatches.map((s) => s.id));
   }
 
+  const [deletingRecentId, setDeletingRecentId] = useState<string | null>(null);
+  async function deleteRecentSwatch(swatchId: string, label: string) {
+    if (!window.confirm(`Remove “${label}” from your recent colours? Existing previews keep their images — this only removes the saved swatch.`)) return;
+    setDeletingRecentId(swatchId);
+    try {
+      const fd = new FormData();
+      fd.append("swatchId", swatchId);
+      const res = await fetch("/api/delete-swatch", { method: "POST", body: fd });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || "Could not remove colour");
+      }
+      setRecentSwatches((prev) => prev.filter((s) => s.id !== swatchId));
+      setSelectedRecentSwatchIds((prev) => prev.filter((id) => id !== swatchId));
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Could not remove colour");
+    } finally {
+      setDeletingRecentId(null);
+    }
+  }
+
   // Legacy single-pick helper kept for clarity - not used in UI anymore
   function selectRecentSwatch(swatch: {
     colourName: string;
@@ -2684,6 +2705,26 @@ const stepTextStyle: CSSProperties = {
                                   gap: "4px",
                                 }}
                               >
+                                {/* Delete from recent (not a <button> — this tile is already a button) */}
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  title="Remove this colour"
+                                  aria-label={`Remove ${swatch.colourName}`}
+                                  onClick={(e) => { e.stopPropagation(); deleteRecentSwatch(swatch.id, swatch.colourName); }}
+                                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); deleteRecentSwatch(swatch.id, swatch.colourName); } }}
+                                  style={{
+                                    position: "absolute", top: "6px", left: "6px",
+                                    width: "20px", height: "20px", borderRadius: "50%",
+                                    background: deletingRecentId === swatch.id ? "#9ca3af" : "rgba(15,23,42,0.6)",
+                                    color: "#fff", fontSize: "13px", fontWeight: 800,
+                                    lineHeight: "20px", textAlign: "center",
+                                    cursor: deletingRecentId === swatch.id ? "wait" : "pointer",
+                                    zIndex: 2, userSelect: "none",
+                                  }}
+                                >
+                                  ×
+                                </span>
                                 {isSelected && (
                                   <div
                                     style={{

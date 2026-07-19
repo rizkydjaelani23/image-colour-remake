@@ -397,6 +397,7 @@ export default function App() {
       <s-app-nav>
         <s-link href="/app">Dashboard</s-link>
         <s-link href="/app/visualiser">Visualiser</s-link>
+        <s-link href="/app/add-colours">Add Colours</s-link>
         <s-link href="/app/previews">Preview Manager</s-link>
         <s-link href="/app/swatches">Swatch Library</s-link>
         <s-link href="/app/storefront-preview-test">Storefront Preview</s-link>
