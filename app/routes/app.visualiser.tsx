@@ -868,8 +868,8 @@ export default function VisualiserPage() {
   }
 
   const [deletingRecentId, setDeletingRecentId] = useState<string | null>(null);
-  async function deleteRecentSwatch(swatchId: string, label: string) {
-    if (!window.confirm(`Remove “${label}” from your recent colours? Existing previews keep their images — this only removes the saved swatch.`)) return;
+  // Deletes immediately on X — no confirm (existing previews keep their images).
+  async function deleteRecentSwatch(swatchId: string) {
     setDeletingRecentId(swatchId);
     try {
       const fd = new FormData();
@@ -2711,8 +2711,8 @@ const stepTextStyle: CSSProperties = {
                                   tabIndex={0}
                                   title="Remove this colour"
                                   aria-label={`Remove ${swatch.colourName}`}
-                                  onClick={(e) => { e.stopPropagation(); deleteRecentSwatch(swatch.id, swatch.colourName); }}
-                                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); deleteRecentSwatch(swatch.id, swatch.colourName); } }}
+                                  onClick={(e) => { e.stopPropagation(); deleteRecentSwatch(swatch.id); }}
+                                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); deleteRecentSwatch(swatch.id); } }}
                                   style={{
                                     position: "absolute", top: "6px", left: "6px",
                                     width: "20px", height: "20px", borderRadius: "50%",
