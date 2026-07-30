@@ -2,10 +2,11 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
 import { getOrCreateShop } from "../utils/shop.server";
+import { syncProductSeo } from "../utils/seo-autosync.server";
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
-    const { session } = await authenticate.admin(request);
+    const { session, admin } = await authenticate.admin(request);
     const shopDomain = session.shop;
 
     const {
@@ -68,6 +69,17 @@ export async function action({ request }: ActionFunctionArgs) {
       },
       data: updateData,
     });
+
+    // ── Fabric SEO Engine: silent backend auto-sync ──────────────────────────
+    // Whenever approval, visibility, or the colour's name changes, bring the
+    // metafield / fabric-* tag / collection page back in sync. Fire-and-forget:
+    // this never blocks the response and never surfaces to the merchant or
+    // customer — a no-op instantly if the shop isn't on the SEO add-on.
+    const seoRelevant = ["approvedForStorefront", "status", "colourName", "customerDisplayName"]
+      .some((k) => k in updateData);
+    if (seoRelevant) {
+      void syncProductSeo(admin, shop, updated.shopifyProductId, updated.productId);
+    }
 
     return Response.json({
       success: true,

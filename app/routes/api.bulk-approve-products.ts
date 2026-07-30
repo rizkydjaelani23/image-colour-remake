@@ -7,9 +7,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
 import { getOrCreateShop } from "../utils/shop.server";
-import { isSeoAddonActive } from "../utils/seo-addon.server";
-import { batchUpdateFabricColoursMetafields } from "../utils/seo-metafield.server";
-import { updateFabricTags } from "../utils/seo-tags.server";
+import { syncProductsSeo } from "../utils/seo-autosync.server";
 
 export async function action({ request }: ActionFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
@@ -75,32 +73,16 @@ export async function action({ request }: ActionFunctionArgs) {
     },
   });
 
-  // ── SEO Engine: sync metafields + tags after bulk approve ────────────────
-  // All fire-and-forget — errors are caught inside each utility.
-  // Only runs if the shop has the SEO add-on active.
-  if (isSeoAddonActive(shop)) {
-    const BATCH_SIZE = 25;
-    const seoPayloads = updatedProducts.map((p) => {
-      const seen = new Set<string>();
-      const colourNames: string[] = [];
-      for (const pv of p.previews) {
-        const name = pv.customerDisplayName || pv.colourName;
-        if (!seen.has(name)) { seen.add(name); colourNames.push(name); }
-      }
-      return { shopifyProductId: p.shopifyProductId, colourNames };
-    });
-
-    // Metafields — batch 25 per GraphQL call
-    for (let i = 0; i < seoPayloads.length; i += BATCH_SIZE) {
-      void batchUpdateFabricColoursMetafields(admin, seoPayloads.slice(i, i + BATCH_SIZE));
-    }
-
-    // Tags — fire per-product (sequential inside the helper)
-    // We look up productId from updatedProducts paired with productIds array
-    for (const up of updatedProducts) {
-      void updateFabricTags(admin, up.shopifyProductId, up.id);
-    }
-  }
+  // ── Fabric SEO Engine: silent backend auto-sync ──────────────────────────
+  // Metafield + fabric-* tags + collection pages, all kept in sync for every
+  // affected product. Fire-and-forget: never blocks this response, never
+  // surfaces to the merchant or customer. No-op instantly if the shop isn't
+  // on the SEO add-on (checked once inside syncProductsSeo).
+  void syncProductsSeo(
+    admin,
+    shop,
+    updatedProducts.map((p) => ({ shopifyProductId: p.shopifyProductId, productId: p.id })),
+  );
 
   return Response.json({
     ok: true,
