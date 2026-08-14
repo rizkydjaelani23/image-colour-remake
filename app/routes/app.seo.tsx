@@ -178,20 +178,11 @@ export default function SeoPage() {
     managedPricingUrl,
   } = useLoaderData<typeof loader>();
 
-  // ── Sync state ───────────────────────────────────────────────────────────
-  const [syncing, setSyncing]   = useState(false);
-  const [syncResult, setSyncResult] = useState<{
-    synced: number; tagsSynced: number; skipped: number; total: number;
-  } | null>(null);
-  const [syncError, setSyncError] = useState<string | null>(null);
-
-  // ── Collections state ─────────────────────────────────────────────────────
-  const [creating, setCreating]         = useState(false);
-  const [createResult, setCreateResult] = useState<{
-    created: number; existing: number; failed: number;
-  } | null>(null);
-  const [createError, setCreateError]   = useState<string | null>(null);
-  const [createShowError, setCreateShowError] = useState(false);
+  // ── Full-catalogue backfill (explicit merchant action, never automatic) ────
+  const [backfillRunning, setBackfillRunning] = useState(false);
+  const [backfillStarted, setBackfillStarted] = useState<{ products: number } | null>(null);
+  const [backfillError, setBackfillError]     = useState<string | null>(null);
+  const [showBackfillConfirm, setShowBackfillConfirm] = useState(false);
 
   // ── Disable / cleanup state ───────────────────────────────────────────────
   const [disabling, setDisabling]       = useState(false);
@@ -239,56 +230,21 @@ export default function SeoPage() {
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
-  async function runSync() {
-    if (syncing) return;
-    setSyncResult(null);
-    setSyncError(null);
-    setSyncing(true);
+  async function runBackfill() {
+    setShowBackfillConfirm(false);
+    if (backfillRunning) return;
+    setBackfillStarted(null);
+    setBackfillError(null);
+    setBackfillRunning(true);
     try {
-      const res  = await fetch("/api/seo-sync", { method: "POST" });
-      const data = await res.json() as {
-        ok?: boolean; synced?: number; tagsSynced?: number;
-        skipped?: number; total?: number; error?: string;
-      };
-      if (!res.ok || !data.ok) throw new Error(data.error ?? "Sync failed");
-      setSyncResult({
-        synced:     data.synced     ?? 0,
-        tagsSynced: data.tagsSynced ?? 0,
-        skipped:    data.skipped    ?? 0,
-        total:      data.total      ?? 0,
-      });
+      const res  = await fetch("/api/seo-backfill", { method: "POST" });
+      const data = await res.json() as { ok?: boolean; started?: boolean; products?: number; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Backfill failed to start");
+      setBackfillStarted({ products: data.products ?? 0 });
     } catch (e) {
-      setSyncError(e instanceof Error ? e.message : "An unexpected error occurred");
+      setBackfillError(e instanceof Error ? e.message : "An unexpected error occurred");
     } finally {
-      setSyncing(false);
-    }
-  }
-
-  async function runCreateCollections() {
-    if (creating) return;
-    setCreateResult(null);
-    setCreateError(null);
-    setCreating(true);
-    try {
-      const res  = await fetch("/api/seo-create-collections", { method: "POST" });
-      const data = await res.json() as {
-        ok?: boolean; created?: number; existing?: number;
-        failed?: number; firstError?: string; error?: string;
-        collections?: Array<{ colourName: string; error?: string }>;
-      };
-      if (!res.ok || !data.ok) throw new Error(data.error ?? "Collection creation failed");
-      // Surface the first failure reason so we can diagnose
-      const firstError = data.collections?.find((c) => c.error)?.error ?? null;
-      setCreateResult({
-        created:  data.created  ?? 0,
-        existing: data.existing ?? 0,
-        failed:   data.failed   ?? 0,
-      });
-      if (firstError) setCreateError(`Shopify error: ${firstError}`);
-    } catch (e) {
-      setCreateError(e instanceof Error ? e.message : "An unexpected error occurred");
-    } finally {
-      setCreating(false);
+      setBackfillRunning(false);
     }
   }
 
@@ -678,94 +634,69 @@ export default function SeoPage() {
         </div>
       </div>
 
-      {/* ── Action row: Sync + Create collections ── */}
-      <div style={{ ...card, padding: "20px 28px" }}>
-        <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", alignItems: "flex-start" }}>
-
-          {/* Sync all */}
-          <div style={{ flex: 1, minWidth: "260px" }}>
-            <div style={{ fontWeight: 700, fontSize: "13px", color: "#111827", marginBottom: "4px" }}>
-              Sync metafields &amp; tags
-            </div>
-            <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.5, marginBottom: "12px" }}>
-              Writes colour metafields and product tags for all{" "}
-              <strong>{approvedProducts}</strong> products that have approved colours.
-              Run this once for existing stock.
-            </div>
-            {syncResult && !syncing && (
-              <div style={{
-                background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px",
-                padding: "10px 14px", marginBottom: "10px", fontSize: "12px", color: "#166534",
-              }}>
-                ✅ <strong>{syncResult.synced}</strong> metafields · <strong>{syncResult.tagsSynced}</strong> tag sets synced
-                {syncResult.skipped > 0 && <> · {syncResult.skipped} skipped</>}
-              </div>
-            )}
-            {syncError && !syncing && (
-              <div style={{
-                background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px",
-                padding: "10px 14px", marginBottom: "10px", fontSize: "12px", color: "#991b1b",
-              }}>
-                ❌ {syncError}
-              </div>
-            )}
-            <button
-              type="button"
-              style={primaryBtn(syncing || approvedProducts === 0)}
-              disabled={syncing || approvedProducts === 0}
-              onClick={runSync}
-            >
-              {syncing ? "⏳ Syncing…" : "🔄 Sync all products"}
-            </button>
-          </div>
-
-          <div style={{ width: "1px", background: "#f1f5f9", alignSelf: "stretch" }} />
-
-          {/* Create collections */}
-          <div style={{ flex: 1, minWidth: "260px" }}>
-            <div style={{ fontWeight: 700, fontSize: "13px", color: "#111827", marginBottom: "4px" }}>
-              Create collection pages
-            </div>
-            <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.5, marginBottom: "12px" }}>
-              Creates a Shopify collection page for each of your{" "}
-              <strong>{fabrics.length}</strong> fabric colours. Pages are live and
-              indexed by Google but NOT added to store navigation unless you choose to.
-            </div>
-            {createResult && !creating && (
-              <div style={{
-                background: createResult.failed > 0 ? "#fef2f2" : "#f0fdf4",
-                border: `1px solid ${createResult.failed > 0 ? "#fecaca" : "#bbf7d0"}`,
-                borderRadius: "8px", padding: "10px 14px", marginBottom: "10px",
-                fontSize: "12px", color: createResult.failed > 0 ? "#991b1b" : "#166534",
-              }}>
-                {createResult.created > 0 && <>✅ <strong>{createResult.created}</strong> created · </>}
-                {createResult.existing > 0 && <>{createResult.existing} already existed · </>}
-                {createResult.failed > 0 && <strong>{createResult.failed} failed</strong>}
-                {createError && (
-                  <div style={{ marginTop: "6px", fontSize: "11px", opacity: 0.85 }}>
-                    ↳ {createError}
-                  </div>
-                )}
-              </div>
-            )}
-            {!createResult && createError && !creating && (
-              <div style={{
-                background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px",
-                padding: "10px 14px", marginBottom: "10px", fontSize: "12px", color: "#991b1b",
-              }}>
-                ❌ {createError}
-              </div>
-            )}
-            <button
-              type="button"
-              style={secondaryBtn(creating || fabrics.length === 0)}
-              disabled={creating || fabrics.length === 0}
-              onClick={runCreateCollections}
-            >
-              {creating ? "⏳ Creating…" : "📄 Create collection pages"}
-            </button>
-          </div>
+      {/* ── Execute: full-catalogue backfill ── */}
+      <div style={{ ...card, padding: "20px 28px", border: "1px solid #c7d2fe", background: "#f8faff" }}>
+        <div style={{ fontWeight: 700, fontSize: "14px", color: "#111827", marginBottom: "4px" }}>
+          ▶ Execute full SEO sync
         </div>
+        <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.6, marginBottom: "12px", maxWidth: "560px" }}>
+          Creates the collection page, tags, and metafield for every approved colour across all{" "}
+          <strong>{approvedProducts}</strong> products with approved colours — everything, in one action.
+          Newly-approved colours sync automatically from now on; this is for catching up colours approved
+          before that, or after a big bulk-approval. <strong>This never runs on its own</strong> — not when
+          the add-on is activated, not on a schedule. It only runs when you click the button below.
+        </div>
+
+        {showBackfillConfirm && (
+          <div style={{
+            background: "#fff", border: "1px solid #c7d2fe", borderRadius: "10px",
+            padding: "14px 16px", marginBottom: "12px",
+          }}>
+            <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+              Sync all {approvedProducts} products now?
+            </div>
+            <div style={{ fontSize: "12px", color: "#6b7280", marginBottom: "12px", lineHeight: 1.5 }}>
+              This creates real, live collection pages on your storefront for any colour that doesn't
+              have one yet. It runs in the background — you can leave this page once it starts.
+            </div>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button type="button" style={primaryBtn(false)} onClick={runBackfill}>
+                Yes, run it now
+              </button>
+              <button type="button" style={secondaryBtn(false)} onClick={() => setShowBackfillConfirm(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {backfillStarted && (
+          <div style={{
+            background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px",
+            padding: "10px 14px", marginBottom: "10px", fontSize: "12px", color: "#166534",
+          }}>
+            ✅ Started — syncing <strong>{backfillStarted.products}</strong> product{backfillStarted.products !== 1 ? "s" : ""} in
+            the background. This can take a few minutes for a large catalogue; refresh this page shortly
+            to see updated collection pages in the table below.
+          </div>
+        )}
+        {backfillError && (
+          <div style={{
+            background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px",
+            padding: "10px 14px", marginBottom: "10px", fontSize: "12px", color: "#991b1b",
+          }}>
+            ❌ {backfillError}
+          </div>
+        )}
+
+        <button
+          type="button"
+          style={primaryBtn(backfillRunning || approvedProducts === 0)}
+          disabled={backfillRunning || approvedProducts === 0}
+          onClick={() => setShowBackfillConfirm(true)}
+        >
+          {backfillRunning ? "⏳ Starting…" : "▶ Execute full SEO sync"}
+        </button>
       </div>
 
       {/* ── Google Search Console ── */}
