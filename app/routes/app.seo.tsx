@@ -228,6 +228,49 @@ export default function SeoPage() {
     f.fabricFamily.toLowerCase().includes(search.toLowerCase()),
   );
 
+  // ── Rename colour (inline edit in the Fabric Index table) ──────────────────
+  const [editingColour, setEditingColour] = useState<string | null>(null);
+  const [renameValue, setRenameValue]     = useState("");
+  const [renaming, setRenaming]           = useState(false);
+  const [renameError, setRenameError]     = useState<string | null>(null);
+
+  function startRename(name: string) {
+    setEditingColour(name);
+    setRenameValue(name);
+    setRenameError(null);
+  }
+
+  function cancelRename() {
+    setEditingColour(null);
+    setRenameValue("");
+    setRenameError(null);
+  }
+
+  async function saveRename(oldName: string) {
+    const newName = renameValue.trim();
+    if (!newName || newName === oldName) {
+      cancelRename();
+      return;
+    }
+    setRenaming(true);
+    setRenameError(null);
+    try {
+      const res  = await fetch("/api/rename-fabric-colour", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ oldName, newName }),
+      });
+      const data = await res.json() as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Rename failed");
+      // Reload to pick up the renamed colour, its new tag/collection, and
+      // updated GSC handle mapping from the loader.
+      window.location.reload();
+    } catch (e) {
+      setRenameError(e instanceof Error ? e.message : "An unexpected error occurred");
+      setRenaming(false);
+    }
+  }
+
   // ── Actions ───────────────────────────────────────────────────────────────
 
   async function runBackfill() {
@@ -941,16 +984,82 @@ export default function SeoPage() {
                       background:   i % 2 === 0 ? "#fff" : "#fafafa",
                     }}
                   >
-                    {/* Colour swatch + name */}
+                    {/* Colour swatch + name (inline-renameable) */}
                     <td style={{ padding: "10px 12px", fontWeight: 600, color: "#111827" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        <div style={{
-                          width: "10px", height: "10px", borderRadius: "50%",
-                          background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-                          flexShrink: 0,
-                        }} />
-                        {f.name}
-                      </div>
+                      {editingColour === f.name ? (
+                        <div>
+                          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                            <input
+                              type="text"
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") void saveRename(f.name);
+                                if (e.key === "Escape") cancelRename();
+                              }}
+                              disabled={renaming}
+                              autoFocus
+                              style={{
+                                padding: "4px 8px", borderRadius: "6px",
+                                border: "1px solid #a5b4fc", fontSize: "13px",
+                                width: "140px", outline: "none",
+                              }}
+                            />
+                            <button
+                              type="button"
+                              disabled={renaming}
+                              onClick={() => void saveRename(f.name)}
+                              title="Save"
+                              style={{
+                                background: "#4f46e5", color: "#fff", border: "none",
+                                borderRadius: "6px", padding: "4px 9px", fontSize: "12px",
+                                fontWeight: 700, cursor: renaming ? "not-allowed" : "pointer",
+                              }}
+                            >
+                              {renaming ? "…" : "✓"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={renaming}
+                              onClick={cancelRename}
+                              title="Cancel"
+                              style={{
+                                background: "none", color: "#9ca3af", border: "1px solid #e5e7eb",
+                                borderRadius: "6px", padding: "4px 9px", fontSize: "12px",
+                                cursor: renaming ? "not-allowed" : "pointer",
+                              }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                          {renameError && (
+                            <div style={{ color: "#dc2626", fontSize: "11px", marginTop: "4px" }}>
+                              {renameError}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <div style={{
+                            width: "10px", height: "10px", borderRadius: "50%",
+                            background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                            flexShrink: 0,
+                          }} />
+                          {f.name}
+                          <button
+                            type="button"
+                            onClick={() => startRename(f.name)}
+                            title={`Rename "${f.name}"`}
+                            style={{
+                              background: "none", border: "none", cursor: "pointer",
+                              color: "#9ca3af", fontSize: "12px", padding: "2px",
+                              lineHeight: 1,
+                            }}
+                          >
+                            ✏️
+                          </button>
+                        </div>
+                      )}
                     </td>
 
                     {/* Fabric family */}
