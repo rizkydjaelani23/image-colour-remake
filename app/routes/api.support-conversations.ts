@@ -1,10 +1,16 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
+import { isSupportInboxOwner } from "../utils/support-owner.server";
 
-// GET /api/support-conversations — admin: list all conversations with messages
+// GET /api/support-conversations — OWNER ONLY: list all conversations with messages.
+// This is a cross-shop view by design (the owner's unified inbox) — must never
+// be reachable by a regular merchant shop.
 export async function loader({ request }: LoaderFunctionArgs) {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  if (!isSupportInboxOwner(session.shop)) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
 
   const conversations = await prisma.supportConversation.findMany({
     orderBy: { updatedAt: "desc" },
@@ -17,9 +23,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
   );
 }
 
-// POST /api/support-conversations — admin: close a conversation
+// POST /api/support-conversations — OWNER ONLY: close a conversation
 export async function action({ request }: ActionFunctionArgs) {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  if (!isSupportInboxOwner(session.shop)) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
 
   const { conversationId, action: act } = await request.json() as {
     conversationId?: string;

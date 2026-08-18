@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useSearchParams } from "react-router";
+import { useLoaderData, useSearchParams, redirect } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
+import { isSupportInboxOwner } from "../utils/support-owner.server";
 
 type Msg = {
   id: string;
@@ -19,8 +20,14 @@ type Conv = {
   messages: Msg[];
 };
 
+// OWNER ONLY — this is a cross-shop admin view (every installed shop's
+// support conversations in one inbox). A regular merchant must never reach
+// this page; redirect anyone else straight back to the app dashboard.
 export async function loader({ request }: LoaderFunctionArgs) {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  if (!isSupportInboxOwner(session.shop)) {
+    throw redirect("/app");
+  }
   const conversations = await prisma.supportConversation.findMany({
     orderBy: { updatedAt: "desc" },
     include: { messages: { orderBy: { createdAt: "asc" } } },

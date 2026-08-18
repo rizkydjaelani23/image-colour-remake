@@ -1,10 +1,17 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../utils/db.server";
+import { isSupportInboxOwner } from "../utils/support-owner.server";
 
-// POST /api/support-reply — admin sends a reply to a merchant conversation
+// POST /api/support-reply — OWNER ONLY: reply to a merchant conversation.
+// Without this gate, any authenticated shop could post into ANY other shop's
+// support chat, appearing as "support" — a cross-tenant impersonation risk on
+// top of the read leak.
 export async function action({ request }: ActionFunctionArgs) {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  if (!isSupportInboxOwner(session.shop)) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
 
   const { conversationId, body } = await request.json() as {
     conversationId?: string;
