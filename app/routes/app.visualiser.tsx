@@ -1076,6 +1076,21 @@ export default function VisualiserPage() {
     }
   }
 
+  // The mask canvas is black with white = area to recolour.
+  function canvasHasSelection(canvas: HTMLCanvasElement): boolean {
+    try {
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return true; // can't check, so don't block saving
+      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] > 128) return true;
+      }
+      return false;
+    } catch {
+      return true; // e.g. a tainted canvas: the server also checks, so don't block here
+    }
+  }
+
   async function saveZone() {
     if (!product) {
       setMaskError("Please select a product first.");
@@ -1090,6 +1105,25 @@ export default function VisualiserPage() {
     const canvas = canvasRef.current;
     if (!canvas) {
       setMaskError("Mask canvas is not ready.");
+      return;
+    }
+
+    // An outline only becomes a selection once it is finished. If someone
+    // outlines the product and goes straight to Save zone, finish it for them;
+    // if the outline is too short to close, say so instead of saving nothing.
+    if (tool === "outline" || tool === "smart-outline") {
+      if (outlinePoints.length >= 3) {
+        finishOutline();
+      } else if (outlinePoints.length > 0) {
+        setMaskError("Your outline needs at least 3 points. Add more points around the product, then click Finish outline.");
+        return;
+      }
+    }
+
+    // Nothing painted/outlined means nothing would be recoloured (the preview
+    // would come out in the original colour), so don't save an empty zone.
+    if (!canvasHasSelection(canvas)) {
+      setMaskError("Nothing is selected yet. Paint over the fabric area, or finish your outline with the Finish outline button, then save the zone.");
       return;
     }
 
@@ -2505,14 +2539,15 @@ const stepTextStyle: CSSProperties = {
                         marginTop: "8px",
                         padding: "10px 14px",
                         borderRadius: "8px",
-                        border: "1px solid #ccc",
-                        background: "#ffffff",
+                        border: outlinePoints.length >= 3 ? "1px solid #4f46e5" : "1px solid #ccc",
+                        background: outlinePoints.length >= 3 ? "#4f46e5" : "#ffffff",
+                        color: outlinePoints.length >= 3 ? "#ffffff" : "inherit",
                         cursor: "pointer",
                         minHeight: "44px",
                         fontWeight: 600,
                       }}
                     >
-                      Finish outline
+                      {outlinePoints.length >= 3 ? "Finish outline (fills the area)" : "Finish outline"}
                     </button>
                   )}
                 </div>

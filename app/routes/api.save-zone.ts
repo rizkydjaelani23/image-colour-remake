@@ -6,6 +6,7 @@ import { getOrCreateShop } from "../utils/shop.server";
 import { upsertProduct } from "../utils/products.server";
 import { safeFolderName } from "../utils/visualiser.server";
 import { uploadBufferToStorage } from "../utils/storage.server";
+import { maskHasSelection, EMPTY_MASK_MESSAGE } from "../utils/mask-check.server";
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
@@ -39,8 +40,13 @@ export async function action({ request }: ActionFunctionArgs) {
       imageUrl: baseImageUrl ?? null,
     });
 
-    // 3. Save mask to Supabase storage
+    // 3. Save mask to storage
     const buffer = Buffer.from(await maskFile.arrayBuffer());
+
+    // Refuse a blank mask: it would render the original photo with no error.
+    if (!(await maskHasSelection(buffer))) {
+      return Response.json({ error: EMPTY_MASK_MESSAGE }, { status: 400 });
+    }
 
     const safeProductId = safeFolderName(productId);
     const maskStoragePath = `${shopDomain}/masks/${safeProductId}/${zoneId}.png`;

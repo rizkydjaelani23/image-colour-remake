@@ -9,6 +9,7 @@ import prisma from "./db.server";
 import { uploadBufferToStorage } from "./storage.server";
 import { safeFolderName } from "./visualiser.server";
 import { recolourV2 } from "./recolour-v2.server";
+import { maskHasSelection } from "./mask-check.server";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -671,6 +672,15 @@ export async function runGeneration(
     await onProgress?.(30);
     maskBuffer = await createProcessedMask(rawMaskBuffer, width, height);
     await onProgress?.(40);
+  }
+
+  // A zone with nothing selected would just return the original photo. Fail
+  // with a clear message instead (covers blank zones saved before save-zone
+  // started rejecting them).
+  if (!(await maskHasSelection(maskBuffer))) {
+    throw new Error(
+      "This zone has no selected area, so there is nothing to recolour. Open the Visualiser, redraw the zone (click Finish outline if you used the outline tool) and save it again.",
+    );
   }
 
   // V2 engine — LAB colour transfer + amplitude-clamped swatch texture, with
