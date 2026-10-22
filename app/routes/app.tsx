@@ -35,7 +35,7 @@ const FAQ_ITEMS = [
 type ChatMessage = {
   id: string;
   body: string;
-  sender: "merchant" | "support" | "system";
+  sender: "merchant" | "support" | "system" | "ai";
   createdAt: string;
 };
 
@@ -54,6 +54,9 @@ function SupportButton() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
   const [openFaq, setOpenFaq]     = useState<number | null>(null);
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [humanRequested, setHumanRequested] = useState(false);
+  const [escalating, setEscalating] = useState(false);
   const messagesEndRef            = useRef<HTMLDivElement>(null);
   const pollRef                   = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -79,6 +82,8 @@ function SupportButton() {
       if (!res.ok) throw new Error(data.error);
       setConvId(data.conversation?.id ?? null);
       setMessages(data.messages ?? []);
+      setAiEnabled(!!data.aiEnabled);
+      setHumanRequested(!!data.conversation?.humanRequested);
       setHasLoaded(true);
     } catch {
       setLoadError("Couldn't load chat history.");
@@ -96,6 +101,7 @@ function SupportButton() {
         if (res.ok) {
           setConvId(data.conversation?.id ?? null);
           setMessages(data.messages ?? []);
+          setHumanRequested(!!data.conversation?.humanRequested);
         }
       } catch { /* silent */ }
     }, 3000); // 3s — snappy enough to feel live
@@ -127,6 +133,12 @@ function SupportButton() {
     const body = draft.trim();
     if (!body || sending) return;
     setSending(true);
+
+    // Show the merchant's message straight away; the AI reply can take a few seconds.
+    const tempId = `opt-${Date.now()}`;
+    setMessages((prev) => [...prev, { id: tempId, body, sender: "merchant", createdAt: new Date().toISOString() }]);
+    setDraft("");
+
     try {
       const res  = await fetch("/api/support-chat", {
         method: "POST",
@@ -135,18 +147,41 @@ function SupportButton() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setDraft("");
       const newMsgs: ChatMessage[] = [data.message];
       if (data.autoReply) newMsgs.push(data.autoReply);
+      if (data.aiReply)   newMsgs.push(data.aiReply);
       setConvId(data.message?.conversationId ?? convId);
       setMessages((prev) => {
-        const ids = new Set(prev.map((m) => m.id));
-        return [...prev, ...newMsgs.filter((m) => !ids.has(m.id))];
+        const real = prev.filter((m) => !m.id.startsWith("opt-"));
+        const ids  = new Set(real.map((m) => m.id));
+        return [...real, ...newMsgs.filter((m) => !ids.has(m.id))];
       });
     } catch (err) {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setDraft(body);
       alert(err instanceof Error ? err.message : "Failed to send");
     } finally {
       setSending(false);
+    }
+  }
+
+  async function requestHuman() {
+    if (escalating) return;
+    setEscalating(true);
+    try {
+      const res  = await fetch("/api/support-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "human" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setHumanRequested(true);
+      setMessages((prev) => (prev.some((m) => m.id === data.message.id) ? prev : [...prev, data.message]));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Couldn't reach the team, please try again");
+    } finally {
+      setEscalating(false);
     }
   }
 
@@ -179,9 +214,10 @@ function SupportButton() {
     borderRadius: sender === "merchant" ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
     fontSize: "13px",
     lineHeight: 1.5,
-    background: sender === "merchant" ? "#4f46e5" : sender === "system" ? "#f0fdf4" : "#f1f5f9",
-    color: sender === "merchant" ? "#fff" : sender === "system" ? "#166534" : "#111827",
-    border: sender === "system" ? "1px solid #bbf7d0" : "none",
+    background: sender === "merchant" ? "#4f46e5" : sender === "system" ? "#f0fdf4" : sender === "ai" ? "#eef2ff" : "#f1f5f9",
+    color: sender === "merchant" ? "#fff" : sender === "system" ? "#166534" : sender === "ai" ? "#1e1b4b" : "#111827",
+    border: sender === "system" ? "1px solid #bbf7d0" : sender === "ai" ? "1px solid #c7d2fe" : "none",
+    whiteSpace: "pre-wrap" as const,
     alignSelf: sender === "merchant" ? "flex-end" : "flex-start",
     wordBreak: "break-word" as const,
   });
@@ -228,7 +264,11 @@ function SupportButton() {
               <div>
                 <div style={{ fontSize: "15px", fontWeight: 800, color: "#fff" }}>🏠 Power Your House</div>
                 <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.75)", marginTop: "2px" }}>
-                  {view === "faq" ? "Frequently asked questions" : "Support · We reply within a few hours"}
+                  {view === "faq"
+                    ? "Frequently asked questions"
+                    : view === "chat" && aiEnabled && !humanRequested
+                      ? "Instant answers · A person is one tap away"
+                      : "Support · We reply within a few hours"}
                 </div>
               </div>
               {view !== "home" && (
@@ -324,7 +364,9 @@ function SupportButton() {
                     <div style={{ fontSize: "28px", marginBottom: "8px" }}>👋</div>
                     <div style={{ fontWeight: 700, color: "#111827", marginBottom: "4px" }}>Hi there!</div>
                     <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.5 }}>
-                      Send us a message and we'll get back to you as soon as possible.
+                      {aiEnabled
+                        ? "Ask anything about the app and our assistant will answer straight away. You can reach a person at any time."
+                        : "Send us a message and we'll get back to you as soon as possible."}
                     </div>
                   </div>
                 )}
@@ -336,7 +378,7 @@ function SupportButton() {
                   }}>
                     {m.sender !== "merchant" && (
                       <div style={{ fontSize: "10px", color: "#94a3b8", marginBottom: "3px", paddingLeft: "4px" }}>
-                        {m.sender === "system" ? "Power Your House" : "Support Team"}
+                        {m.sender === "system" ? "Power Your House" : m.sender === "ai" ? "🤖 AI assistant" : "Support Team"}
                       </div>
                     )}
                     <div style={bubble(m.sender)}>{m.body}</div>
@@ -345,8 +387,35 @@ function SupportButton() {
                     </div>
                   </div>
                 ))}
+                {sending && aiEnabled && !humanRequested && (
+                  <div style={{ alignSelf: "flex-start", fontSize: "12px", color: "#6b7280", padding: "2px 4px" }}>
+                    🤖 Assistant is typing…
+                  </div>
+                )}
                 <div ref={messagesEndRef} />
               </div>
+
+              {/* Hand-off to a person (only while the AI is handling the chat) */}
+              {aiEnabled && !humanRequested && messages.some((m) => m.sender === "merchant") && (
+                <div style={{
+                  padding: "6px 12px", borderTop: "1px solid #f1f5f9", background: "#fafafa",
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexShrink: 0,
+                }}>
+                  <span style={{ fontSize: "11px", color: "#6b7280" }}>Still confused?</span>
+                  <button
+                    type="button"
+                    onClick={requestHuman}
+                    disabled={escalating}
+                    style={{
+                      fontSize: "12px", fontWeight: 700, color: "#4f46e5", background: "#eef2ff",
+                      border: "1px solid #c7d2fe", borderRadius: "999px", padding: "4px 12px",
+                      cursor: escalating ? "not-allowed" : "pointer", fontFamily: "inherit",
+                    }}
+                  >
+                    {escalating ? "Contacting team…" : "Talk to a person"}
+                  </button>
+                </div>
+              )}
 
               {/* Input bar */}
               <div style={{

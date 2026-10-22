@@ -166,6 +166,9 @@ model SupportConversation {
   shopId     String
   shopDomain String
   status     String   @default("open") // open | closed
+  // True once the merchant has asked for a person. The AI assistant stays out
+  // of the conversation after that, and the team is notified instead.
+  humanRequested Boolean @default(false)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 

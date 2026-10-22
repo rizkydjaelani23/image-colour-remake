@@ -246,7 +246,8 @@ function ChatDashboard({ loader }: { loader: Extract<LoaderData, { ok: true }> }
 }
 
 function Bubble({ msg }: { msg: Msg }) {
-  const isSupport    = msg.sender === "support";
+  const isAi         = msg.sender === "ai";
+  const isSupport    = msg.sender === "support" || isAi; // team side of the thread
   const isMerchant   = msg.sender === "merchant";
   const isSystem     = msg.sender === "system";
   const isOptimistic = msg.id.startsWith("opt-");
@@ -263,15 +264,16 @@ function Bubble({ msg }: { msg: Msg }) {
         paddingLeft:  !isSupport ? "4px" : 0,
         paddingRight:  isSupport ? "4px" : 0,
       }}>
-        {isMerchant ? "🧑 Merchant" : isSystem ? "🤖 Auto-reply" : "🏠 You"}
+        {isMerchant ? "🧑 Merchant" : isSystem ? "🤖 Auto-reply" : isAi ? "🤖 AI assistant" : "🏠 You"}
       </div>
       <div style={{
         maxWidth: "72%",
         padding: "10px 14px",
         borderRadius: isSupport ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
-        background: isMerchant ? "#f1f5f9" : isSystem ? "#f0fdf4" : "#4f46e5",
-        color:      isMerchant ? "#111827" : isSystem ? "#166534" : "#fff",
-        border:     isSystem ? "1px solid #bbf7d0" : "none",
+        background: isMerchant ? "#f1f5f9" : isSystem ? "#f0fdf4" : isAi ? "#eef2ff" : "#4f46e5",
+        color:      isMerchant ? "#111827" : isSystem ? "#166534" : isAi ? "#1e1b4b" : "#fff",
+        border:     isSystem ? "1px solid #bbf7d0" : isAi ? "1px solid #c7d2fe" : "none",
+        whiteSpace: "pre-wrap",
         fontSize: "14px", lineHeight: 1.5, wordBreak: "break-word",
         opacity: isOptimistic ? 0.7 : 1,
         transition: "opacity 0.2s",

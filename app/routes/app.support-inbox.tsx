@@ -113,9 +113,10 @@ export default function SupportInboxPage() {
     borderRadius: sender === "merchant" ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
     fontSize: "14px",
     lineHeight: 1.5,
-    background: sender === "merchant" ? "#f1f5f9" : sender === "system" ? "#f0fdf4" : "#4f46e5",
-    color: sender === "merchant" ? "#111827" : sender === "system" ? "#166534" : "#fff",
-    border: sender === "system" ? "1px solid #bbf7d0" : "none",
+    background: sender === "merchant" ? "#f1f5f9" : sender === "system" ? "#f0fdf4" : sender === "ai" ? "#eef2ff" : "#4f46e5",
+    color: sender === "merchant" ? "#111827" : sender === "system" ? "#166534" : sender === "ai" ? "#1e1b4b" : "#fff",
+    border: sender === "system" ? "1px solid #bbf7d0" : sender === "ai" ? "1px solid #c7d2fe" : "none",
+    whiteSpace: "pre-wrap" as const,
     alignSelf: sender === "merchant" ? "flex-start" : "flex-end",
     wordBreak: "break-word" as const,
   });
@@ -244,7 +245,7 @@ export default function SupportInboxPage() {
                   paddingLeft: m.sender === "merchant" ? "4px" : 0,
                   paddingRight: m.sender !== "merchant" ? "4px" : 0,
                 }}>
-                  {m.sender === "merchant" ? "🧑 Merchant" : m.sender === "system" ? "🤖 Auto-reply" : "🏠 You"}
+                  {m.sender === "merchant" ? "🧑 Merchant" : m.sender === "system" ? "🤖 Auto-reply" : m.sender === "ai" ? "🤖 AI assistant" : "🏠 You"}
                 </div>
                 <div style={bubble(m.sender)}>{m.body}</div>
                 <div style={{ fontSize: "10px", color: "#cbd5e1", marginTop: "3px",
